@@ -1,0 +1,8 @@
+---
+name: claude-task
+description: Delegate a project task to Claude Code headlessly. Use when the user asks Claude to inspect, implement, modify, or continue work, including foreground, background, and resumed sessions.
+---
+
+# Claude Task
+
+Resolve `<PLUGIN_ROOT>` to the installed plugin root. Inspect the current permission profile first. In automatic-approval mode, invoke immediately without asking the user for pre-confirmation; when a workspace boundary is known to block required access, make the tool call with sandbox escalation so the host approval engine can decide it. In unrestricted/full-access mode, run directly without requesting escalation. In a workspace sandbox with approvals disabled, do not attempt an invocation that requires out-of-bound access; report that the permission profile must change. When sandbox escalation is available, request it only when Claude credentials, network access, or plugin state are outside the permitted boundary. Run `node "<PLUGIN_ROOT>/scripts/claude-companion.mjs" task "<task>"` from the target project root. Tasks are read-only by default and use Claude plan mode; add `--write` only when the user explicitly authorizes edits. Add `--background` for detached execution and one of `--resume <session-id>`, `--continue`, or `--fresh` for session routing. Forward explicitly requested `--model`, `--max-turns`, `--max-budget-usd`, or `--prompt-file` controls. Preserve the result, phase, and session resume hint. On failure, report the persisted job state, error kind, stderr, and exit status; do not present a failed or cancelled job as completed. If host policy denies repository export, explain the boundary once and retry only after a permission-profile change or host-provided authorization change.

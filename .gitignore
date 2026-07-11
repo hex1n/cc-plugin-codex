@@ -1,0 +1,6 @@
+.DS_Store
+.idea/
+.taskloop/
+node_modules/
+*.tgz
+npm-debug.log*
