@@ -46,8 +46,8 @@ export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, conti
   if (result.code !== 0) throw new Error(result.stderr.trim() || `Claude exited with code ${result.code}`);
   return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid };
 }
-export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath, promptMeta, backgroundTimeoutMs }) {
-  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model });
+export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null }) {
+  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, purpose, disclosure });
   let workerPid = null;
   try {
     const timeoutMs = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, 3_600_000);

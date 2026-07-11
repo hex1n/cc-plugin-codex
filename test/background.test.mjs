@@ -62,6 +62,7 @@ test("a running detached job can be cancelled", async () => {
   const cancelled = await run(["cancel", id, "--json"], fx);
   assert.equal(cancelled.code, 0, cancelled.stderr);
   assert.equal(JSON.parse(cancelled.stdout).job.status, "cancelled");
+  assert.equal(JSON.parse(cancelled.stdout).job.phase, "cancelled");
   const status = await run(["status", id, "--json"], fx);
   assert.equal(JSON.parse(status.stdout).job.status, "cancelled");
   const result = await run(["result", id, "--json"], fx);

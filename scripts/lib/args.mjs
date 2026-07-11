@@ -1,7 +1,7 @@
-const BOOL = new Set(["json", "wait", "all", "background", "write", "continue", "fresh", "help", "enable-review-gate", "disable-review-gate"]);
-const VALUE = new Set(["base", "resume", "model", "max-turns", "max-budget-usd", "prompt-file", "timeout-ms", "poll-interval-ms"]);
+const BOOL = new Set(["json", "wait", "all", "global", "include-test", "background", "write", "continue", "fresh", "help", "enable-review-gate", "disable-review-gate"]);
+const VALUE = new Set(["base", "resume", "model", "max-turns", "max-budget-usd", "prompt-file", "timeout-ms", "poll-interval-ms", "recent", "status", "purpose", "context", "finalize-at-turn"]);
 export function parseArgs(argv) {
-  const options = { json: false, wait: false, all: false, background: false, write: false, continue: false, fresh: false, base: null, resume: null, model: null, "max-turns": null, "max-budget-usd": null, "prompt-file": null, "timeout-ms": null, "poll-interval-ms": null, help: false, "enable-review-gate": false, "disable-review-gate": false }, positional = [];
+  const options = { json: false, wait: false, all: false, global: false, "include-test": false, background: false, write: false, continue: false, fresh: false, base: null, resume: null, model: null, "max-turns": null, "max-budget-usd": null, "prompt-file": null, "timeout-ms": null, "poll-interval-ms": null, recent: null, status: null, purpose: null, context: null, "finalize-at-turn": null, help: false, "enable-review-gate": false, "disable-review-gate": false }, positional = [];
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === "--") {
@@ -22,8 +22,8 @@ export function usage() { return `cc-plugin-codex — call Claude Code from Code
 
 Usage:
   node scripts/claude-companion.mjs review [--base <ref>] [--json] [--wait] [--background]
-  node scripts/claude-companion.mjs task [prompt...] [--write] [--resume <session-id>|--continue|--fresh] [--model <model>] [--max-turns <n>] [--max-budget-usd <amount>] [--prompt-file <path>] [--json] [--wait] [--background]
-  node scripts/claude-companion.mjs status [job-id] [--wait] [--timeout-ms <ms>] [--poll-interval-ms <ms>] [--all] [--json]
+  node scripts/claude-companion.mjs task [prompt...] [--write] [--resume <session-id>|--continue|--fresh] [--model <model>] [--max-turns <n>] [--finalize-at-turn <n>] [--context <summary|diff|full>] [--max-budget-usd <amount>] [--prompt-file <path>] [--json] [--wait] [--background]
+  node scripts/claude-companion.mjs status [job-id] [--wait] [--timeout-ms <ms>] [--poll-interval-ms <ms>] [--all|--global] [--recent <24h>] [--status <state>] [--purpose <kind>] [--include-test] [--json]
   node scripts/claude-companion.mjs result [job-id] [--json]
   node scripts/claude-companion.mjs cancel [job-id] [--json]
   node scripts/claude-companion.mjs adversarial-review [focus...] [--base <ref>] [--json] [--background]
@@ -33,7 +33,7 @@ Usage:
 Commands:
   review   Review the working-tree diff, or changes since a merge base
   task     Ask Claude Code to perform a task (read-only unless --write)
-  status   Inspect the current session's latest job, one job, or --all history
+  status   Inspect the current session, workspace history, or explicit global history
   result   Read a completed job result
   cancel   Terminate a running job process tree
   adversarial-review  Challenge a diff using the read-only review profile

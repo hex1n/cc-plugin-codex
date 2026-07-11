@@ -3,7 +3,7 @@ import { parseArgs, usage } from "./lib/args.mjs";
 import { CLAUDE_CLI, readClaudeJobResult, runClaude, startClaudeJob } from "./lib/claude.mjs";
 import { collectReviewContext, findWorkspaceRoot } from "./lib/git.mjs";
 import { renderError, renderJob, renderJobs, renderResult } from "./lib/render.mjs";
-import { codexSessionId, listJobs, readJob, transitionJob } from "./lib/state.mjs";
+import { codexSessionId, listGlobalJobs, listJobs, readJob, transitionJob } from "./lib/state.mjs";
 import { terminateProcessTree } from "./lib/process.mjs";
 import { reconcileJob } from "./lib/job-lifecycle.mjs";
 import { inspectClaudeSetup } from "./lib/setup.mjs";
@@ -17,7 +17,7 @@ const ACTIVE = new Set(["starting", "running", "queued"]);
 async function execute(profile, renderedPrompt, cwd, options, outputSchema = null) {
   const prompt = typeof renderedPrompt === "string" ? renderedPrompt : renderedPrompt.text, promptMeta = typeof renderedPrompt === "string" ? null : renderedPrompt;
   const runtime = { resume: options.resume, continueSession: options.continue, write: options.write, model: options.model, maxTurns: options["max-turns"], maxBudgetUsd: options["max-budget-usd"], timeoutMs: options["timeout-ms"] == null ? undefined : positiveNumber(options["timeout-ms"], "--timeout-ms"), backgroundTimeoutMs: options.backgroundTimeoutMs };
-  if (options.background) return renderJob(await startClaudeJob({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema, promptMeta }), options);
+  if (options.background) return renderJob(await startClaudeJob({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema, promptMeta, purpose: options.purpose ?? "user", disclosure: options.disclosure ?? null }), options);
   return renderResult(await runClaude({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema }), options);
 }
 async function dispatch({ command, positional, options }) {
@@ -32,18 +32,25 @@ async function dispatch({ command, positional, options }) {
   options.backgroundTimeoutMs = runtimeConfig.jobs.backgroundTimeoutMs;
   if (options.background && options.wait) throw new Error("--background and --wait cannot be used together");
   if (options.resume && command !== "task") throw new Error("--resume is only supported by task");
-  if ((options.write || options.continue || options.fresh || options.model || options["max-turns"] || options["max-budget-usd"] || options["prompt-file"]) && command !== "task") throw new Error("Task runtime options are only supported by task");
+  if ((options.write || options.continue || options.fresh || options.model || options["max-turns"] || options["max-budget-usd"] || options["prompt-file"] || options.context || options["finalize-at-turn"]) && command !== "task") throw new Error("Task runtime options are only supported by task");
   if (command === "review") { if (positional.length) throw new Error(`Unexpected review arguments: ${positional.join(" ")}`); const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await reviewPrompt(context), context.root, options, schemaPath("review-output")); }
   if (command === "adversarial-review") { const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await adversarialReviewPrompt(context, positional.join(" ").trim()), context.root, options, schemaPath("review-output")); }
   if (command === "task") {
     const routing = [Boolean(options.resume), options.continue, options.fresh].filter(Boolean).length;
     if (routing > 1) throw new Error("Choose only one of --resume, --continue, or --fresh");
     const maxTurns = options["max-turns"] == null ? null : positiveInteger(options["max-turns"], "--max-turns");
+    const finalizeAtTurn = options["finalize-at-turn"] == null ? null : positiveInteger(options["finalize-at-turn"], "--finalize-at-turn");
+    if (finalizeAtTurn && !maxTurns) throw new Error("--finalize-at-turn requires --max-turns");
+    if (finalizeAtTurn && finalizeAtTurn >= maxTurns) throw new Error("--finalize-at-turn must be lower than --max-turns");
+    const contextMode = options.context ?? "summary";
+    if (!["summary", "diff", "full"].includes(contextMode)) throw new Error("--context must be summary, diff, or full");
     const maxBudget = options["max-budget-usd"] == null ? null : positiveNumber(options["max-budget-usd"], "--max-budget-usd");
     options["max-turns"] = maxTurns; options["max-budget-usd"] = maxBudget;
     const userTask = await readTaskInput(positional, options);
     if (!userTask) throw new Error("task requires a prompt, --prompt-file, or piped stdin");
-    const prompt = await renderPrompt("task-wrapper", { USER_TASK: userTask, PERMISSION_MODE: options.write ? "write-capable (acceptEdits)" : "read-only (plan)" });
+    options.disclosure = { destination: "Claude Code", context: contextMode, source: options["prompt-file"] ? "prompt-file" : positional.length ? "positional" : "stdin", bytes: Buffer.byteLength(userTask), mode: options.write ? "write-capable" : "read-only", repository_access: "enabled" };
+    const budgetGuidance = finalizeAtTurn ? `\n\nTurn budget: Beginning with turn ${finalizeAtTurn}, stop expanding the investigation and use the remaining turns to synthesize evidence, state uncertainty, and produce the final answer.` : "";
+    const prompt = await renderPrompt("task-wrapper", { USER_TASK: `${userTask}${budgetGuidance}`, PERMISSION_MODE: options.write ? "write-capable (acceptEdits)" : "read-only (plan)" });
     return execute("task", prompt, await findWorkspaceRoot(process.cwd()), options);
   }
   if (command === "transfer") {
@@ -66,12 +73,14 @@ async function dispatch({ command, positional, options }) {
   if (command === "status") {
     if (positional.length > 1) throw new Error("status accepts at most one job id");
     if (options.wait && !positional[0]) throw new Error("status --wait requires a job id");
+    if (positional[0] && (options.global || options.recent || options.status || options.purpose || options["include-test"])) throw new Error("Global and filter options cannot be combined with a job id");
+    if (options.global && options.all) throw new Error("Choose either --all or --global");
     if (positional[0]) {
       const job = options.wait ? await waitForJob(workspace, positional[0], options) : await refresh(await readJob(workspace, positional[0]));
       return renderJob(job, options);
     }
-    const allJobs = await Promise.all((await listJobs(workspace)).map(refresh));
-    if (options.all) return renderJobs(allJobs, options);
+    const allJobs = await Promise.all((options.global ? await listGlobalJobs() : await listJobs(workspace)).map(refresh));
+    if (options.global || options.all || options.recent || options.status || options.purpose || options["include-test"]) return renderJobs(filterJobs(allJobs, options), options);
     const jobs = scopedJobs(allJobs);
     if (!jobs[0]) throw new Error("No jobs found for the current Codex session");
     return renderJob(jobs[0], options);
@@ -100,7 +109,7 @@ async function dispatch({ command, positional, options }) {
       await transitionJob(workspace, job.id, ["running"], current => { const { cancellationRequestedAt, ...rest } = current; return { ...rest, cancellationError: error.message }; });
       throw error;
     }
-    const transition = await transitionJob(workspace, job.id, ["running"], current => ({ ...current, status: "cancelled", cancellationMode: "hard_process_tree", finishedAt: new Date().toISOString() }));
+    const transition = await transitionJob(workspace, job.id, ["running"], current => ({ ...current, status: "cancelled", phase: "cancelled", cancellationMode: "hard_process_tree", finishedAt: new Date().toISOString() }));
     if (!transition.changed) throw new Error(`Job ${job.id} became ${transition.record.status} before cancellation completed`);
     return renderJob(transition.record, options);
   }
@@ -128,5 +137,13 @@ function renderSetup(report) {
   return lines.join("\n");
 }
 function scopedJobs(jobs) { const sessionId = codexSessionId(); return sessionId ? jobs.filter(job => job.ownerSessionId === sessionId) : jobs; }
+function filterJobs(jobs, options) {
+  let filtered = options["include-test"] ? jobs : jobs.filter(job => job.purpose !== "e2e");
+  if (options.recent) { const cutoff = Date.now() - durationMs(options.recent); filtered = filtered.filter(job => Date.parse(job.createdAt) >= cutoff); }
+  if (options.status) filtered = filtered.filter(job => job.status === options.status);
+  if (options.purpose) filtered = filtered.filter(job => job.purpose === options.purpose);
+  return filtered;
+}
+function durationMs(value) { const match = /^(\d+)(m|h|d)$/.exec(String(value)); if (!match) throw new Error("--recent requires a duration such as 30m, 24h, or 7d"); return Number(match[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2]]; }
 try { const parsed = parseArgs(process.argv.slice(2)); process.stdout.write(`${await dispatch(parsed)}\n`); }
 catch (error) { let json = false; try { json = parseArgs(process.argv.slice(2)).options.json; } catch {} process.stderr.write(`${renderError(error, { json })}\n`); process.exitCode = 1; }

@@ -66,6 +66,15 @@ export function progressForStreamEvent(event) {
   return { phase: "investigating", progressMessage: "Claude is reasoning about the task" };
 }
 
+export function errorForStreamResult(event) {
+  if (event?.type !== "result" || event.is_error !== true) return null;
+  const subtype = event.subtype ?? "unknown";
+  const common = { upstreamErrorSubtype: subtype, ...(event.session_id ? { sessionId: event.session_id } : {}) };
+  if (subtype === "error_max_turns") return { errorKind: "max_turns", ...common, error: "Claude reached the configured turn limit before producing a final result", suggestedAction: "resume_or_increase_turns" };
+  if (subtype === "error_during_execution") return { errorKind: "claude_execution", ...common, error: "Claude reported an execution error", suggestedAction: "inspect_stderr_or_resume" };
+  return { errorKind: "claude_result", ...common, error: `Claude returned an error result (${subtype})`, suggestedAction: "inspect_stderr_or_resume" };
+}
+
 export async function appendStreamEvent(path, event, now = new Date()) {
   const progress = progressForStreamEvent(event);
   if (!progress) return;

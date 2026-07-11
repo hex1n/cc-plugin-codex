@@ -32,6 +32,20 @@ test("workspace status isolates a corrupt job record instead of failing", async 
   assert.match(await readFile(join(fx.directory, "broken.json"), "utf8"), /not json/);
 });
 
+test("global status discovers other workspaces and hides E2E jobs by default", async () => {
+  const fx = await fixture(), other = join(fx.cwd, "other"), otherDirectory = join(fx.env.CLAUDE_COMPANION_STATE_ROOT, createHash("sha256").update(other).digest("hex").slice(0, 16));
+  await mkdir(otherDirectory, { recursive: true });
+  const createdAt = new Date().toISOString();
+  await writeFile(join(otherDirectory, "user-job.json"), JSON.stringify({ id: "user-job", cwd: other, profile: "task", status: "completed", phase: "done", purpose: "user", createdAt, finishedAt: createdAt }));
+  await writeFile(join(otherDirectory, "e2e-job.json"), JSON.stringify({ id: "e2e-job", cwd: other, profile: "task", status: "completed", phase: "done", purpose: "e2e", namespace: "cc-plugin-codex-e2e", createdAt, finishedAt: createdAt }));
+  const output = await run(companion, ["status", "--global", "--recent", "24h", "--json"], fx);
+  assert.equal(output.code, 0, output.stderr);
+  assert.deepEqual(new Set(JSON.parse(output.stdout).jobs.map(job => job.id)), new Set(["user-job", "active"]));
+  assert.equal(JSON.parse(output.stdout).jobs.some(job => job.id === "e2e-job"), false);
+  const withTests = await run(companion, ["status", "--global", "--include-test", "--json"], fx);
+  assert.deepEqual(new Set(JSON.parse(withTests.stdout).jobs.map(job => job.id)), new Set(["user-job", "e2e-job", "active", "old", "broken"]));
+});
+
 test("reconciliation does not mislabel a worker after cancellation is requested", async () => {
   const job = { id: "cancelling", cwd: "/unused", status: "running", pid: 99999999, cancellationRequestedAt: new Date().toISOString() };
   assert.equal(await reconcileJob(job), job);

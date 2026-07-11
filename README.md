@@ -66,8 +66,15 @@ real plugin root, skills directory, and manifest path for diagnostics.
 
 The default task mode is read-only Claude plan mode. Use `/claude-task --write`
 only when Claude should edit the workspace. Useful task controls include
-`--model`, `--max-turns`, `--max-budget-usd`, `--prompt-file`, `--resume`,
+`--model`, `--max-turns`, `--finalize-at-turn`, `--context`,
+`--max-budget-usd`, `--prompt-file`, `--resume`,
 `--continue`, `--fresh`, and `--background`.
+
+For long inputs, prefer `--prompt-file` so approval and shell displays remain
+compact. `--context summary|diff|full` declares how much context is being sent;
+it does not silently transform the prompt. JSON results and tracked jobs expose
+a compact disclosure summary. `--finalize-at-turn <n>` adds a soft instruction
+to synthesize before the hard `--max-turns` limit is reached.
 
 Environment variables:
 
@@ -148,15 +155,24 @@ verifying, retrying, and finalizing. Examples:
 ```sh
 node scripts/claude-companion.mjs task --background --write "Implement the change"
 node scripts/claude-companion.mjs status --all
+node scripts/claude-companion.mjs status --global --recent 24h
+node scripts/claude-companion.mjs status --global --status failed
 node scripts/claude-companion.mjs status <job-id> --wait --timeout-ms 300000
 node scripts/claude-companion.mjs result
 node scripts/claude-companion.mjs cancel
 ```
 
 `status` without an ID returns the current Codex session's latest job; `--all`
-returns full workspace history. `result` and `cancel` without an ID select the
+returns full workspace history. Explicit `--global` searches all persisted
+workspaces; test jobs stay hidden unless `--include-test` is present. Filters
+include `--recent 30m|24h|7d`, `--status`, and `--purpose`. `result` and `cancel` without an ID select the
 current session's latest applicable job. Session start reconciles stale records.
 Session end prunes old finished records but never terminates active work.
+
+Terminal phases match their status (`done`, `failed`, `cancelled`, or
+`timed_out`). Claude error subtypes such as `error_max_turns` are retained with
+a stable error kind, recovery suggestion, and resume session when available.
+Legacy records are normalized only while reading and labelled `legacy-partial`.
 
 ## Platform support
 

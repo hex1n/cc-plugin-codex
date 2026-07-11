@@ -39,6 +39,14 @@ test("task reads prompts from a file or stdin", async () => {
   const stdinFx = await fixture(), fromStdin = await run(["task", "--json"], stdinFx, "from stdin"); assert.equal(fromStdin.code, 0, fromStdin.stderr); assert.match((await captured(stdinFx)).at(-1), /from stdin/);
 });
 
+test("task exposes a compact disclosure summary and finalization budget", async () => {
+  const fx = await fixture(), result = await run(["task", "review this design", "--context", "full", "--max-turns", "6", "--finalize-at-turn", "4", "--json"], fx);
+  assert.equal(result.code, 0, result.stderr);
+  const output = JSON.parse(result.stdout), args = await captured(fx);
+  assert.deepEqual(output.disclosure, { destination: "Claude Code", context: "full", source: "positional", bytes: 18, mode: "read-only", repository_access: "enabled" });
+  assert.match(args.at(-1), /Beginning with turn 4/);
+});
+
 test("task rejects conflicting session routing controls", async () => {
   const fx = await fixture(), result = await run(["task", "continue", "--resume", "abc", "--fresh", "--json"], fx); assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /resume.*fresh|fresh.*resume/i);
 });

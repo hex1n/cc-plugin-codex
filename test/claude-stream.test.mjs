@@ -3,7 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { appendStreamEvent, createStreamJsonParser, progressForStreamEvent } from "../scripts/lib/claude-stream.mjs";
+import { appendStreamEvent, createStreamJsonParser, errorForStreamResult, progressForStreamEvent } from "../scripts/lib/claude-stream.mjs";
 
 test("stream-json parser handles chunk boundaries and reports malformed lines", () => {
   const events = [], malformed = [];
@@ -25,6 +25,17 @@ test("stream events map to stable job phases", () => {
   assert.equal(progressForStreamEvent({ type: "result", session_id: "s" }).phase, "finalizing");
   assert.equal(progressForStreamEvent({ type: "tool_use", name: "Read" }).phase, "investigating");
   assert.equal(progressForStreamEvent({ type: "retry", attempt: 3 }).phase, "retrying");
+});
+
+test("Claude result subtypes map to actionable stable errors", () => {
+  assert.deepEqual(errorForStreamResult({ type: "result", subtype: "error_max_turns", is_error: true, session_id: "s" }), {
+    errorKind: "max_turns",
+    upstreamErrorSubtype: "error_max_turns",
+    error: "Claude reached the configured turn limit before producing a final result",
+    suggestedAction: "resume_or_increase_turns",
+    sessionId: "s"
+  });
+  assert.equal(errorForStreamResult({ type: "result", subtype: "success" }), null);
 });
 
 test("append-only event log excludes prompt and tool inputs", async () => {

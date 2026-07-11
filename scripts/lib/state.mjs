@@ -8,9 +8,9 @@ function key(cwd) { return createHash("sha256").update(cwd).digest("hex").slice(
 function directoryFor(cwd) { return join(STATE_ROOT, key(cwd)); }
 function pathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.json`); }
 function requestPathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.request`); }
-export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, ownerSessionId = codexSessionId() }) {
+export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, ownerSessionId = codexSessionId(), purpose = "user", namespace = null, disclosure = null }) {
   const id = randomUUID(), artifacts = jobArtifacts(cwd, id);
-  return saveJob({ id, cwd, profile, write: Boolean(write), model, resumeSessionId, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
+  return saveJob({ recordVersion: 2, id, cwd, profile, purpose, namespace, disclosure, write: Boolean(write), model, resumeSessionId, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
 }
 export async function saveJob(record) {
   await mkdir(directoryFor(record.cwd), { recursive: true });
@@ -19,7 +19,7 @@ export async function saveJob(record) {
   await rename(temporary, target);
   return record;
 }
-export async function readJob(cwd, id) { return JSON.parse(await readFile(pathFor(cwd, id), "utf8")); }
+export async function readJob(cwd, id) { return normalizeJob(JSON.parse(await readFile(pathFor(cwd, id), "utf8"))); }
 export async function transitionJob(cwd, id, allowedStatuses, update) {
   const lock = `${pathFor(cwd, id)}.lock`;
   const lockToken = await acquireLock(lock);
@@ -44,6 +44,18 @@ export async function listJobs(cwd) {
   }));
   return jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
+export async function listGlobalJobs() {
+  let directories;
+  try { directories = await readdir(STATE_ROOT, { withFileTypes: true }); } catch (error) { if (error.code === "ENOENT") return []; throw error; }
+  const groups = await Promise.all(directories.filter(entry => entry.isDirectory()).map(async entry => {
+    const directory = join(STATE_ROOT, entry.name), names = await readdir(directory);
+    return Promise.all(names.filter(name => name.endsWith(".json")).map(async name => {
+      try { return normalizeJob(JSON.parse(await readFile(join(directory, name), "utf8"))); }
+      catch (error) { return { recordVersion: 1, metadataCompleteness: "legacy-partial", id: name.slice(0, -5), cwd: null, profile: "unknown", purpose: "user", status: "corrupt", phase: null, pid: null, createdAt: new Date(0).toISOString(), error: `Could not parse persisted job JSON: ${error.message}` }; }
+    }));
+  }));
+  return groups.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
 export async function deleteJob(record) {
   const artifacts = jobArtifacts(record.cwd, record.id), paths = [pathFor(record.cwd, record.id), artifacts.stdoutPath, artifacts.stderrPath, artifacts.eventsPath, artifacts.requestPath];
   await Promise.all(paths.map(path => unlink(path).catch(error => { if (error.code !== "ENOENT") throw error; })));
@@ -62,6 +74,11 @@ export function jobArtifacts(cwd, id) {
 function safeId(id) {
   if (typeof id !== "string" || !id || id === "." || id === ".." || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Invalid job id");
   return id;
+}
+
+function normalizeJob(job) {
+  const terminalPhase = { completed: "done", failed: "failed", cancelled: "cancelled", timed_out: "timed_out" }[job.status];
+  return { recordVersion: job.recordVersion ?? 1, metadataCompleteness: job.recordVersion ? "complete" : "legacy-partial", purpose: job.purpose ?? (job.cwd?.includes("cc-plugin-codex-e2e") ? "e2e" : "user"), namespace: job.namespace ?? null, ...job, phase: job.phase ?? terminalPhase ?? null };
 }
 
 async function acquireLock(path) {

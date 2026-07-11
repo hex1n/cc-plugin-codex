@@ -23,6 +23,7 @@ async function fixture() {
   await writeFile(fake, `#!/usr/bin/env node
 const raw=process.argv.at(-1),prompt=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw;
 if(prompt==="fail"){console.error("deliberate failure");process.exit(7)}
+if(prompt==="max-turns"){console.log(JSON.stringify({type:"result",subtype:"error_max_turns",is_error:true,result:"turn limit",session_id:"resume-me"}));process.exit(1)}
 if(prompt==="malformed"){console.log("not-json");process.exit(0)}
 console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[]},session_id:"persisted-session"}));
 `);
@@ -64,6 +65,15 @@ test("a nonzero detached Claude exit is failed, not completed", async () => {
   assert.match(job.error, /deliberate failure/);
   const result = await run(["result", id, "--json"], fx);
   assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /deliberate failure/);
+});
+
+test("a max-turns result preserves the actionable Claude error", async () => {
+  const fx = await fixture(), id = await launch(fx, "max-turns"), job = await terminalStatus(fx, id);
+  assert.equal(job.status, "failed");
+  assert.equal(job.error_kind, "max_turns");
+  assert.equal(job.upstream_error_subtype, "error_max_turns");
+  assert.equal(job.suggested_action, "resume_or_increase_turns");
+  assert.equal(job.session_id, "resume-me");
 });
 
 test("a zero exit without a valid Claude payload is failed", async () => {

@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { CLAUDE_CLI, claudeArgs, parseClaudeJson } from "./lib/claude.mjs";
-import { appendStreamEvent, createStreamJsonParser, progressForStreamEvent } from "./lib/claude-stream.mjs";
+import { appendStreamEvent, createStreamJsonParser, errorForStreamResult, progressForStreamEvent } from "./lib/claude-stream.mjs";
 import { jobArtifacts, readJob, takeJobRequest, transitionJob } from "./lib/state.mjs";
 
 const [cwd, id] = process.argv.slice(2);
@@ -15,7 +15,9 @@ try {
   const request = await takeJobRequest(job);
   let updateQueue = Promise.resolve();
   let malformedStream = false;
+  let streamError = null;
   const outcome = await runToLogs(CLAUDE_CLI.executable, claudeArgs(request.profile, request.prompt, request), { ...job, ...artifacts }, event => {
+    streamError = errorForStreamResult(event) ?? streamError;
     const progress = progressForStreamEvent(event); if (!progress) return;
     updateQueue = updateQueue.then(async () => {
       await appendStreamEvent(artifacts.eventsPath, event);
@@ -27,7 +29,7 @@ try {
   if (latest.status !== "running") process.exit(0);
   if (outcome.code !== 0) {
     const stderr = (await readFile(artifacts.stderrPath, "utf8")).trim();
-    await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: outcome.signal ? "signal" : "nonzero_exit", error: stderr || `Claude exited with code ${outcome.code}`, finishedAt: new Date().toISOString() }));
+    await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: outcome.signal ? "signal" : streamError?.errorKind ?? "nonzero_exit", upstreamErrorSubtype: streamError?.upstreamErrorSubtype ?? null, suggestedAction: streamError?.suggestedAction ?? null, sessionId: streamError?.sessionId ?? current.sessionId, error: streamError?.error ?? (stderr || `Claude exited with code ${outcome.code}`), finishedAt: new Date().toISOString() }));
     process.exit(0);
   }
   if (malformedStream) {

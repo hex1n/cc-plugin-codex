@@ -7,17 +7,17 @@ export async function reconcileJob(job, { now = Date.now() } = {}) {
   if (job.status === "starting") {
     const staleAfter = positiveTimeout(process.env.CLAUDE_COMPANION_STARTING_TIMEOUT_MS, DEFAULT_STARTING_TIMEOUT_MS);
     if (age(job.createdAt, now) >= staleAfter) {
-      return (await transitionJob(job.cwd, job.id, ["starting"], current => ({ ...current, status: "failed", errorKind: "starting_timeout", error: `Job remained in starting state for at least ${staleAfter}ms`, finishedAt: new Date(now).toISOString() }))).record;
+      return (await transitionJob(job.cwd, job.id, ["starting"], current => ({ ...current, status: "failed", phase: "failed", errorKind: "starting_timeout", error: `Job remained in starting state for at least ${staleAfter}ms`, finishedAt: new Date(now).toISOString() }))).record;
     }
     return job;
   }
   if (job.status !== "running") return job;
   if (job.cancellationRequestedAt) return job;
-  if (!isProcessRunning(job.pid)) return (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "failed", errorKind: "worker_lost", error: "Detached worker exited before recording a terminal result", finishedAt: new Date(now).toISOString() }))).record;
+  if (!isProcessRunning(job.pid)) return (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "failed", phase: "failed", errorKind: "worker_lost", error: "Detached worker exited before recording a terminal result", finishedAt: new Date(now).toISOString() }))).record;
   const deadline = Date.parse(job.deadlineAt);
   if (Number.isFinite(deadline) && now >= deadline) {
     await terminateProcessTree(job.pid);
-    return (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "timed_out", errorKind: "timeout", finishedAt: new Date(now).toISOString() }))).record;
+    return (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "timed_out", phase: "timed_out", errorKind: "timeout", finishedAt: new Date(now).toISOString() }))).record;
   }
   return job;
 }
