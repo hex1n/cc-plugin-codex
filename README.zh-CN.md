@@ -8,6 +8,13 @@
 
 插件提供八个技能：环境诊断、代码审查、对抗性审查、任务委托、会话移交、任务状态、结果读取和任务取消。
 
+## 设计参考
+
+本项目参考了 [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc)
+的产品思路。该项目让 Claude Code 用户调用 Codex 完成审查和委托任务；本项目
+探索相反方向：由 Codex 继续负责编排，并把任务委托给用户本机的 Claude Code
+CLI。
+
 ## 安装
 
 先把本仓库加入个人 Codex marketplace，再安装插件：

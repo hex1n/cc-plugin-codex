@@ -14,6 +14,14 @@ is already configured.
 It exposes eight skills: setup, review, adversarial review, task, transfer,
 status, result, and cancel.
 
+## Design reference
+
+This project was inspired by
+[openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc), which lets
+Claude Code users invoke Codex for reviews and delegated tasks. This repository
+explores the reverse direction: Codex remains the orchestrator and delegates to
+the user's local Claude Code CLI.
+
 ## Installation
 
 Add this repository to a personal Codex marketplace, then install its plugin:
