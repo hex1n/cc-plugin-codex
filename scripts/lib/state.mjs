@@ -8,9 +8,9 @@ function key(cwd) { return createHash("sha256").update(cwd).digest("hex").slice(
 function directoryFor(cwd) { return join(STATE_ROOT, key(cwd)); }
 function pathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.json`); }
 function requestPathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.request`); }
-export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, ownerSessionId = codexSessionId(), purpose = "user", namespace = null, disclosure = null }) {
+export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, ownerSessionId = codexSessionId(), purpose = "user", namespace = null, disclosure = null, reviewProfile = null, maxTurns = null, finalizeAtTurn = null, maxBudgetUsd = null }) {
   const id = randomUUID(), artifacts = jobArtifacts(cwd, id);
-  return saveJob({ recordVersion: 2, id, cwd, profile, purpose, namespace, disclosure, write: Boolean(write), model, resumeSessionId, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
+  return saveJob({ recordVersion: 2, id, cwd, profile, purpose, namespace, disclosure, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, write: Boolean(write), model, resumeSessionId, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
 }
 export async function saveJob(record) {
   await mkdir(directoryFor(record.cwd), { recursive: true });

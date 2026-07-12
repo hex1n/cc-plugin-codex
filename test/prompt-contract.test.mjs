@@ -14,6 +14,7 @@ test("Claude usage metadata survives parsing and result rendering", () => {
   assert.equal(json.usage.output_tokens, 7);
   assert.equal(json.model_usage.opus.cacheReadInputTokens, 5);
   assert.equal(json.total_tokens, 41);
+  assert.match(json.usage_summary, /tokens=41/);
   assert.equal(json.total_cost_usd, 1.25);
   assert.equal(json.num_turns, 4);
   assert.equal(json.duration_ms, 100);
@@ -46,11 +47,11 @@ function exec(command, args, { cwd, env = process.env } = {}) {
 }
 
 test("prompt templates interpolate a strict, versioned contract", async () => {
-  const rendered = await renderPrompt("review", { TARGET_LABEL: "working tree", REVIEW_COLLECTION_GUIDANCE: "Inspect the supplied diff.", REVIEW_INPUT: "diff --git a/a b/a" });
+  const rendered = await renderPrompt("review", { TARGET_LABEL: "working tree", REVIEW_COLLECTION_GUIDANCE: "Inspect the supplied diff.", REVIEW_BUDGET_GUIDANCE: "Review profile: standard", REVIEW_INPUT: "diff --git a/a b/a" });
   assert.equal(rendered.name, "review"); assert.match(rendered.hash, /^[a-f0-9]{64}$/);
   assert.match(rendered.text, /<role>/); assert.match(rendered.text, /untrusted/i); assert.doesNotMatch(rendered.text, /{{[A-Z_]+}}/);
   await assert.rejects(() => renderPrompt("review", { TARGET_LABEL: "x" }), /Missing prompt variable/);
-  await assert.rejects(() => renderPrompt("review", { TARGET_LABEL: "x", REVIEW_COLLECTION_GUIDANCE: "x", REVIEW_INPUT: "x", EXTRA: "x" }), /Unknown prompt variable/);
+  await assert.rejects(() => renderPrompt("review", { TARGET_LABEL: "x", REVIEW_COLLECTION_GUIDANCE: "x", REVIEW_BUDGET_GUIDANCE: "x", REVIEW_INPUT: "x", EXTRA: "x" }), /Unknown prompt variable/);
   for (const name of ["adversarial-review", "stop-review-gate", "task-wrapper", "transfer-seed"]) assert.match((await readFile(resolve("prompts", `${name}.md`), "utf8")), /<role>|<task>/);
 });
 
@@ -58,11 +59,11 @@ test("review passes a JSON Schema and returns structured output", async () => {
   const root = await mkdtemp(join(tmpdir(), "claude-prompt-contract-test-")), cwd = join(root, "workspace"), capture = join(root, "args.json"), fake = join(root, "claude");
   await mkdir(cwd); await exec("git", ["init", "--quiet"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
-  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[]},session_id:"structured-session"}));\n`); await chmod(fake, 0o755);
+  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"structured-session"}));\n`); await chmod(fake, 0o755);
   const result = await exec(process.execPath, [companion, "review", "--json"], { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_ARGS: capture } });
   assert.equal(result.code, 0, result.stderr);
   const args = JSON.parse(await readFile(capture, "utf8")), schemaIndex = args.indexOf("--json-schema");
-  assert.ok(schemaIndex > 0); const schema = JSON.parse(args[schemaIndex + 1]); assert.deepEqual(schema.required, ["verdict", "summary", "findings", "next_steps"]); assert.equal("$schema" in schema, false);
+  assert.ok(schemaIndex > 0); const schema = JSON.parse(args[schemaIndex + 1]); assert.deepEqual(schema.required, ["verdict", "summary", "findings", "next_steps", "coverage", "uncertainty", "budget_exhausted", "recommended_followup"]); assert.equal("$schema" in schema, false);
   const payload = JSON.parse(result.stdout); assert.equal(payload.structured_output.verdict, "approve"); assert.equal(payload.session_id, "structured-session");
 });
 
@@ -79,13 +80,18 @@ test("background review status exposes prompt contract metadata", async () => {
   const root = await mkdtemp(join(tmpdir(), "claude-prompt-metadata-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude");
   await mkdir(cwd); await exec("git", ["init", "--quiet"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
-  await writeFile(fake, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[]},session_id:"background-review"}));\n`); await chmod(fake, 0o755);
+  await writeFile(fake, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"background-review"}));\n`); await chmod(fake, 0o755);
   const fx = { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state } };
   const launched = await exec(process.execPath, [companion, "review", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
   const id = JSON.parse(launched.stdout).job.id, deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
     const status = await exec(process.execPath, [companion, "status", id, "--json"], fx), job = JSON.parse(status.stdout).job;
-    if (job.status === "completed") { assert.equal(job.prompt_name, "review"); assert.match(job.prompt_hash, /^[a-f0-9]{64}$/); return; }
+    if (job.status === "completed") {
+      assert.equal(job.prompt_name, "review"); assert.match(job.prompt_hash, /^[a-f0-9]{64}$/); assert.equal(job.review_profile, "standard"); assert.equal(job.budget.max_turns, 12); assert.equal(job.budget.finalize_at_turn, 9);
+      const completed = await exec(process.execPath, [companion, "result", id, "--json"], fx), payload = JSON.parse(completed.stdout);
+      assert.equal(payload.review_profile, "standard"); assert.equal(payload.budget.max_turns, 12); assert.equal(payload.budget.finalize_at_turn, 9);
+      return;
+    }
     await new Promise(resolveWait => setTimeout(resolveWait, 40));
   }
   assert.fail("Background review did not complete");

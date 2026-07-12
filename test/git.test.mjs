@@ -21,7 +21,7 @@ async function fixture() {
   await mkdir(cwd);
   for (const args of [["init", "--quiet"], ["config", "user.email", "test@example.com"], ["config", "user.name", "Test"]]) assert.equal((await exec("git", args, { cwd })).code, 0);
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd });
-  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_PROMPT,process.argv.at(-1));console.log(JSON.stringify({type:"result",is_error:false,result:"reviewed",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[]},session_id:"review-session"}));\n`); await chmod(fake, 0o755);
+  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_PROMPT,process.argv.at(-1));console.log(JSON.stringify({type:"result",is_error:false,result:"reviewed",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"review-session"}));\n`); await chmod(fake, 0o755);
   return { cwd, capture, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_PROMPT: capture } };
 }
 

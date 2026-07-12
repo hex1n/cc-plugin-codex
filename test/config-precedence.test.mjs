@@ -19,8 +19,8 @@ test("config precedence is project over user over environment over defaults", as
   const workspace = join(root, "repo", "nested");
   const userFile = join(root, "home", ".codex", "claude-companion", "config.json");
   await mkdir(workspace, { recursive: true });
-  await writeJson(userFile, { task: { model: "user-model", maxTurns: 8, maxBudgetUsd: 3 }, jobs: { backgroundTimeoutMs: 9000 } });
-  await writeJson(join(root, "repo", ".codex", "cc-plugin-codex.json"), { task: { model: "project-model", maxTurns: 5 } });
+  await writeJson(userFile, { task: { model: "user-model", maxTurns: 8, maxBudgetUsd: 3 }, review: { model: "user-review-model", profile: "quick" }, jobs: { backgroundTimeoutMs: 9000 } });
+  await writeJson(join(root, "repo", ".codex", "cc-plugin-codex.json"), { task: { model: "project-model", maxTurns: 5 }, review: { model: "project-review-model", profile: "standard", profiles: { standard: { maxTurns: 10, finalizeAtTurn: 8, maxBudgetUsd: 0.8, timeoutMs: 180000 } } } });
 
   const config = await loadRuntimeConfig({
     cwd: workspace,
@@ -29,6 +29,9 @@ test("config precedence is project over user over environment over defaults", as
   });
 
   assert.deepEqual(config.task, { model: "project-model", maxTurns: 5, maxBudgetUsd: 3 });
+  assert.equal(config.review.model, "project-review-model");
+  assert.equal(config.review.profile, "standard");
+  assert.equal(config.review.profiles.standard.maxTurns, 10);
   assert.equal(config.jobs.backgroundTimeoutMs, 9000);
   assert.equal(config.sources.project, join(root, "repo", ".codex", "cc-plugin-codex.json"));
   assert.equal(config.sources.user, userFile);

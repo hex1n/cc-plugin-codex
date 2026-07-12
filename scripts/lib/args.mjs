@@ -1,7 +1,7 @@
 const BOOL = new Set(["json", "wait", "all", "global", "include-test", "background", "write", "continue", "fresh", "help", "enable-review-gate", "disable-review-gate"]);
-const VALUE = new Set(["base", "resume", "model", "max-turns", "max-budget-usd", "prompt-file", "timeout-ms", "poll-interval-ms", "recent", "status", "purpose", "context", "finalize-at-turn"]);
+const VALUE = new Set(["base", "resume", "model", "max-turns", "max-budget-usd", "prompt-file", "timeout-ms", "poll-interval-ms", "recent", "status", "purpose", "context", "finalize-at-turn", "review-profile"]);
 export function parseArgs(argv) {
-  const options = { json: false, wait: false, all: false, global: false, "include-test": false, background: false, write: false, continue: false, fresh: false, base: null, resume: null, model: null, "max-turns": null, "max-budget-usd": null, "prompt-file": null, "timeout-ms": null, "poll-interval-ms": null, recent: null, status: null, purpose: null, context: null, "finalize-at-turn": null, help: false, "enable-review-gate": false, "disable-review-gate": false }, positional = [];
+  const options = { json: false, wait: false, all: false, global: false, "include-test": false, background: false, write: false, continue: false, fresh: false, base: null, resume: null, model: null, "max-turns": null, "max-budget-usd": null, "prompt-file": null, "timeout-ms": null, "poll-interval-ms": null, recent: null, status: null, purpose: null, context: null, "finalize-at-turn": null, "review-profile": null, help: false, "enable-review-gate": false, "disable-review-gate": false }, positional = [];
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === "--") {
@@ -21,12 +21,12 @@ export function parseArgs(argv) {
 export function usage() { return `cc-plugin-codex — call Claude Code from Codex
 
 Usage:
-  node scripts/claude-companion.mjs review [--base <ref>] [--json] [--wait] [--background]
+  node scripts/claude-companion.mjs review [--base <ref>] [--review-profile <quick|standard|deep>] [--model <model>] [--max-turns <n>] [--finalize-at-turn <n>] [--max-budget-usd <amount>] [--timeout-ms <ms>] [--json] [--wait] [--background]
   node scripts/claude-companion.mjs task [prompt...] [--write] [--resume <session-id>|--continue|--fresh] [--model <model>] [--max-turns <n>] [--finalize-at-turn <n>] [--context <summary|diff|full>] [--max-budget-usd <amount>] [--prompt-file <path>] [--json] [--wait] [--background]
   node scripts/claude-companion.mjs status [job-id] [--wait] [--timeout-ms <ms>] [--poll-interval-ms <ms>] [--all|--global] [--recent <24h>] [--status <state>] [--purpose <kind>] [--include-test] [--json]
   node scripts/claude-companion.mjs result [job-id] [--json]
   node scripts/claude-companion.mjs cancel [job-id] [--json]
-  node scripts/claude-companion.mjs adversarial-review [focus...] [--base <ref>] [--json] [--background]
+  node scripts/claude-companion.mjs adversarial-review [focus...] [--base <ref>] [--review-profile <quick|standard|deep>] [--model <model>] [--max-turns <n>] [--finalize-at-turn <n>] [--max-budget-usd <amount>] [--timeout-ms <ms>] [--json] [--background]
   node scripts/claude-companion.mjs transfer <digest...> [--json]
   node scripts/claude-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]
 

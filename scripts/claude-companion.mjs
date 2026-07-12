@@ -10,13 +10,13 @@ import { inspectClaudeSetup } from "./lib/setup.mjs";
 import { loadRuntimeConfig, setReviewGateEnabled } from "./lib/config.mjs";
 import { renderPrompt, schemaPath } from "./lib/prompts.mjs";
 import { readFile } from "node:fs/promises";
-async function reviewPrompt(c) { return renderPrompt("review", { TARGET_LABEL: c.range, REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
-export async function adversarialReviewPrompt(c, focus = "") { return renderPrompt("adversarial-review", { TARGET_LABEL: c.range, USER_FOCUS: focus || "none", REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
+async function reviewPrompt(c, options) { return renderPrompt("review", { TARGET_LABEL: c.range, REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
+export async function adversarialReviewPrompt(c, focus = "", options = {}) { return renderPrompt("adversarial-review", { TARGET_LABEL: c.range, USER_FOCUS: focus || "none", REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
 const refresh = reconcileJob;
 const ACTIVE = new Set(["starting", "running", "queued"]);
 async function execute(profile, renderedPrompt, cwd, options, outputSchema = null) {
   const prompt = typeof renderedPrompt === "string" ? renderedPrompt : renderedPrompt.text, promptMeta = typeof renderedPrompt === "string" ? null : renderedPrompt;
-  const runtime = { resume: options.resume, continueSession: options.continue, write: options.write, model: options.model, maxTurns: options["max-turns"], maxBudgetUsd: options["max-budget-usd"], timeoutMs: options["timeout-ms"] == null ? undefined : positiveNumber(options["timeout-ms"], "--timeout-ms"), backgroundTimeoutMs: options.backgroundTimeoutMs };
+  const runtime = { resume: options.resume, continueSession: options.continue, write: options.write, model: options.model, maxTurns: options["max-turns"], finalizeAtTurn: options["finalize-at-turn"], maxBudgetUsd: options["max-budget-usd"], reviewProfile: options["review-profile"], timeoutMs: options["timeout-ms"] == null ? undefined : positiveNumber(options["timeout-ms"], "--timeout-ms"), backgroundTimeoutMs: options.backgroundTimeoutMs };
   if (options.background) return renderJob(await startClaudeJob({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema, promptMeta, purpose: options.purpose ?? "user", disclosure: options.disclosure ?? null }), options);
   return renderResult(await runClaude({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema }), options);
 }
@@ -28,13 +28,17 @@ async function dispatch({ command, positional, options }) {
     options["max-turns"] ??= runtimeConfig.task.maxTurns;
     options["max-budget-usd"] ??= runtimeConfig.task.maxBudgetUsd;
   }
-  if (command === "review" || command === "adversarial-review") options.base ??= runtimeConfig.review.base;
+  const reviewCommand = command === "review" || command === "adversarial-review";
+  if (reviewCommand) applyReviewRuntime(options, runtimeConfig.review);
   options.backgroundTimeoutMs = runtimeConfig.jobs.backgroundTimeoutMs;
   if (options.background && options.wait) throw new Error("--background and --wait cannot be used together");
   if (options.resume && command !== "task") throw new Error("--resume is only supported by task");
-  if ((options.write || options.continue || options.fresh || options.model || options["max-turns"] || options["max-budget-usd"] || options["prompt-file"] || options.context || options["finalize-at-turn"]) && command !== "task") throw new Error("Task runtime options are only supported by task");
-  if (command === "review") { if (positional.length) throw new Error(`Unexpected review arguments: ${positional.join(" ")}`); const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await reviewPrompt(context), context.root, options, schemaPath("review-output")); }
-  if (command === "adversarial-review") { const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await adversarialReviewPrompt(context, positional.join(" ").trim()), context.root, options, schemaPath("review-output")); }
+  if (options.model && command !== "task" && !reviewCommand) throw new Error("--model is only supported by task, review, and adversarial-review");
+  if (options["review-profile"] && !reviewCommand) throw new Error("--review-profile is only supported by review and adversarial-review");
+  if ((options.write || options.continue || options.fresh || options["prompt-file"] || options.context) && command !== "task") throw new Error("These runtime options are only supported by task");
+  if ((options["max-turns"] || options["max-budget-usd"] || options["finalize-at-turn"]) && command !== "task" && !reviewCommand) throw new Error("Budget options are only supported by task, review, and adversarial-review");
+  if (command === "review") { if (positional.length) throw new Error(`Unexpected review arguments: ${positional.join(" ")}`); const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await reviewPrompt(context, options), context.root, options, schemaPath("review-output")); }
+  if (command === "adversarial-review") { const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await adversarialReviewPrompt(context, positional.join(" ").trim(), options), context.root, options, schemaPath("review-output")); }
   if (command === "task") {
     const routing = [Boolean(options.resume), options.continue, options.fresh].filter(Boolean).length;
     if (routing > 1) throw new Error("Choose only one of --resume, --continue, or --fresh");
@@ -94,7 +98,7 @@ async function dispatch({ command, positional, options }) {
     if (job.status === "cancelled") throw new Error(`Job ${job.id} was cancelled`);
     if (job.status === "timed_out") throw new Error(`Job ${job.id} exceeded its ${job.timeoutMs}ms wall-clock timeout`);
     if (job.status === "failed") throw new Error(job.error || `Job ${job.id} failed`);
-    return renderResult(await readClaudeJobResult(job), options);
+    return renderResult(await readClaudeJobResult(job), { ...options, "review-profile": job.reviewProfile ?? null, "max-turns": job.maxTurns ?? null, "finalize-at-turn": job.finalizeAtTurn ?? null, "max-budget-usd": job.maxBudgetUsd ?? null, "timeout-ms": job.timeoutMs ?? null });
   }
   if (command === "cancel") {
     if (positional.length > 1) throw new Error("cancel accepts at most one job id");
@@ -125,6 +129,24 @@ async function readTaskInput(positional, options) {
 }
 function positiveInteger(value, name) { const parsed = Number(value); if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} requires a positive integer`); return parsed; }
 function positiveNumber(value, name) { const parsed = Number(value); if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} requires a positive number`); return parsed; }
+function applyReviewRuntime(options, reviewConfig) {
+  const profileName = options["review-profile"] ?? reviewConfig.profile;
+  if (!["quick", "standard", "deep"].includes(profileName)) throw new Error("--review-profile must be quick, standard, or deep");
+  const profile = reviewConfig.profiles[profileName];
+  options["review-profile"] = profileName;
+  options.base ??= reviewConfig.base;
+  options.model ??= profile.model ?? reviewConfig.model;
+  const explicitFinalize = options["finalize-at-turn"] != null;
+  options["max-turns"] = positiveInteger(options["max-turns"] ?? profile.maxTurns, "--max-turns");
+  if (options["max-turns"] < 2) throw new Error("Review --max-turns must be at least 2 so the finalization phase has room to run");
+  options["finalize-at-turn"] = positiveInteger(explicitFinalize ? options["finalize-at-turn"] : Math.min(profile.finalizeAtTurn, options["max-turns"] - 1), "--finalize-at-turn");
+  if (options["finalize-at-turn"] >= options["max-turns"]) throw new Error("--finalize-at-turn must be lower than --max-turns");
+  options["max-budget-usd"] = positiveNumber(options["max-budget-usd"] ?? profile.maxBudgetUsd, "--max-budget-usd");
+  options["timeout-ms"] = positiveNumber(options["timeout-ms"] ?? profile.timeoutMs, "--timeout-ms");
+}
+function reviewBudgetGuidance(options) {
+  return `Review profile: ${options["review-profile"]}. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. Beginning with turn ${options["finalize-at-turn"]}, stop expanding the investigation. Use remaining turns to verify findings, enumerate examined and skipped files, state uncertainty and budget exhaustion, and recommend only a focused deeper follow-up when warranted.`;
+}
 async function waitForJob(workspace, id, options) {
   const timeoutMs = options["timeout-ms"] == null ? 240_000 : positiveNumber(options["timeout-ms"], "--timeout-ms"), pollMs = options["poll-interval-ms"] == null ? 2_000 : positiveNumber(options["poll-interval-ms"], "--poll-interval-ms"), deadline = Date.now() + timeoutMs;
   while (true) { const job = await refresh(await readJob(workspace, id)); if (!ACTIVE.has(job.status)) return job; if (Date.now() >= deadline) throw new Error(`Timed out waiting for job ${id}`); await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now())))); }

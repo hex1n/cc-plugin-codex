@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "summary", "findings", "next_steps"],
+  "required": ["verdict", "summary", "findings", "next_steps", "coverage", "uncertainty", "budget_exhausted", "recommended_followup"],
   "properties": {
     "verdict": { "type": "string", "enum": ["approve", "needs-attention"] },
     "summary": { "type": "string", "minLength": 1 },
@@ -24,6 +24,28 @@
         }
       }
     },
-    "next_steps": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+    "next_steps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_examined", "files_skipped", "areas"],
+      "properties": {
+        "files_examined": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "files_skipped": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "areas": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "uncertainty": { "type": "string", "enum": ["low", "medium", "high"] },
+    "budget_exhausted": { "type": "boolean" },
+    "recommended_followup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "focus", "reason"],
+      "properties": {
+        "profile": { "type": "string", "enum": ["none", "quick", "standard", "deep"] },
+        "focus": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "reason": { "type": "string" }
+      }
+    }
   }
 }

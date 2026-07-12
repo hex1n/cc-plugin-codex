@@ -84,6 +84,8 @@ Environment variables:
 | `CLAUDE_COMPANION_MAX_TURNS` | unset | Default task turn limit |
 | `CLAUDE_COMPANION_MAX_BUDGET_USD` | unset | Default task budget limit |
 | `CLAUDE_COMPANION_REVIEW_BASE` | unset | Default review base ref |
+| `CLAUDE_COMPANION_REVIEW_MODEL` | unset | Default Claude model for review commands |
+| `CLAUDE_COMPANION_REVIEW_PROFILE` | `standard` | Default review budget profile (`quick`, `standard`, or `deep`) |
 | `CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS` | `3600000` | Detached-job wall-clock limit |
 | `CLAUDE_COMPANION_STARTING_TIMEOUT_MS` | `60000` | Stale starting-record limit |
 | `CLAUDE_COMPANION_RETENTION_DAYS` | `30` | Finished-job retention age |
@@ -99,7 +101,16 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
 ```json
 {
   "task": { "model": "sonnet", "maxTurns": 8, "maxBudgetUsd": 5 },
-  "review": { "base": "main" },
+  "review": {
+    "base": "main",
+    "model": "sonnet",
+    "profile": "standard",
+    "profiles": {
+      "quick": { "model": "fast-model", "maxTurns": 6, "finalizeAtTurn": 4, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
+      "standard": { "model": "balanced-model", "maxTurns": 12, "finalizeAtTurn": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
+      "deep": { "model": "deep-model", "maxTurns": 24, "finalizeAtTurn": 20, "maxBudgetUsd": 3, "timeoutMs": 600000 }
+    }
+  },
   "jobs": { "backgroundTimeoutMs": 3600000 }
 }
 ```
@@ -117,6 +128,9 @@ per-model usage, total cost, turn count, and API/runtime duration when the
 installed Claude CLI provides those fields. JSON output also includes a
 cross-model `total_tokens` convenience value; older CLI payloads return `null`
 for unavailable metadata.
+The bundled task, result, review, and adversarial-review skills require these
+metrics to be included in the user-facing response. Background launch output
+cannot know final usage; retrieve it with `claude-result` after completion.
 
 ## Prompt contracts
 
@@ -129,6 +143,13 @@ Review and Stop-gate prompts use JSON Schemas under `schemas/`. Human-readable
 text is still retained, while machine decisions consume Claude's structured
 output. User task text is wrapped as untrusted task content and is never treated
 as a plugin control instruction.
+
+Review profiles bound turns, cost, and wall-clock time without automatically
+chaining multiple models. A review must report examined and skipped files,
+uncertainty, budget exhaustion, and a focused follow-up profile. Use `quick` for
+small scans, `standard` for normal reviews, and `deep` for security, concurrency,
+migrations, or core state machines. CLI budget flags override the selected
+profile for one invocation.
 
 ## Security model
 

@@ -25,7 +25,7 @@ const raw=process.argv.at(-1),prompt=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/ta
 if(prompt==="fail"){console.error("deliberate failure");process.exit(7)}
 if(prompt==="max-turns"){console.log(JSON.stringify({type:"result",subtype:"error_max_turns",is_error:true,result:"turn limit",session_id:"resume-me"}));process.exit(1)}
 if(prompt==="malformed"){console.log("not-json");process.exit(0)}
-console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[]},session_id:"persisted-session"}));
+console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"persisted-session"}));
 `);
   await chmod(fake, 0o755);
   return { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS: "10000" } };

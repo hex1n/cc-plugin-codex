@@ -33,7 +33,16 @@ export async function setReviewGateEnabled(enabled) {
 
 const DEFAULT_RUNTIME_CONFIG = Object.freeze({
   task: Object.freeze({ model: null, maxTurns: null, maxBudgetUsd: null }),
-  review: Object.freeze({ base: null }),
+  review: Object.freeze({
+    base: null,
+    model: null,
+    profile: "standard",
+    profiles: Object.freeze({
+      quick: Object.freeze({ model: null, maxTurns: 6, finalizeAtTurn: 4, maxBudgetUsd: 0.3, timeoutMs: 120_000 }),
+      standard: Object.freeze({ model: null, maxTurns: 12, finalizeAtTurn: 9, maxBudgetUsd: 1, timeoutMs: 240_000 }),
+      deep: Object.freeze({ model: null, maxTurns: 24, finalizeAtTurn: 20, maxBudgetUsd: 3, timeoutMs: 600_000 })
+    })
+  }),
   jobs: Object.freeze({ backgroundTimeoutMs: 3_600_000 })
 });
 
@@ -46,7 +55,7 @@ export async function loadRuntimeConfig({ cwd = process.cwd(), env = process.env
       maxTurns: numberOrNull(env.CLAUDE_COMPANION_MAX_TURNS),
       maxBudgetUsd: numberOrNull(env.CLAUDE_COMPANION_MAX_BUDGET_USD)
     },
-    review: { base: emptyToNull(env.CLAUDE_COMPANION_REVIEW_BASE) },
+    review: { base: emptyToNull(env.CLAUDE_COMPANION_REVIEW_BASE), model: emptyToNull(env.CLAUDE_COMPANION_REVIEW_MODEL), profile: emptyToNull(env.CLAUDE_COMPANION_REVIEW_PROFILE) },
     jobs: { backgroundTimeoutMs: numberOrNull(env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS) }
   };
   const userValue = await readOptionalConfig(user);
@@ -82,11 +91,12 @@ async function readOptionalConfig(path) {
 
 function validateShape(value, path) {
   if (!plainObject(value)) throw new Error(`Configuration ${path} must be a JSON object`);
-  const allowed = { task: new Set(["model", "maxTurns", "maxBudgetUsd"]), review: new Set(["base"]), jobs: new Set(["backgroundTimeoutMs"]) };
+  const allowed = { task: new Set(["model", "maxTurns", "maxBudgetUsd"]), review: new Set(["base", "model", "profile", "profiles"]), jobs: new Set(["backgroundTimeoutMs"]) };
   for (const [section, fields] of Object.entries(value)) {
     if (!allowed[section]) throw new Error(`Unknown configuration section: ${section}`);
     if (!plainObject(fields)) throw new Error(`Configuration section ${section} must be an object`);
     for (const field of Object.keys(fields)) if (!allowed[section].has(field)) throw new Error(`Unknown configuration field: ${section}.${field}`);
+    if (section === "review" && fields.profiles !== undefined) validateProfileMap(fields.profiles, path);
   }
 }
 
@@ -94,7 +104,12 @@ function mergeConfig(...layers) {
   const output = { task: {}, review: {}, jobs: {} };
   for (const layer of layers) {
     for (const section of ["task", "review", "jobs"]) {
-      for (const [key, value] of Object.entries(layer[section] ?? {})) if (value !== null && value !== undefined && value !== "") output[section][key] = value;
+      for (const [key, value] of Object.entries(layer[section] ?? {})) if (value !== null && value !== undefined && value !== "") {
+        if (section === "review" && key === "profiles") {
+          output.review.profiles ??= {};
+          for (const [name, profile] of Object.entries(value)) output.review.profiles[name] = { ...(output.review.profiles[name] ?? {}), ...profile };
+        } else output[section][key] = value;
+      }
     }
   }
   return output;
@@ -103,6 +118,9 @@ function mergeConfig(...layers) {
 function validateRuntimeConfig(config) {
   nullableString(config.task.model, "task.model");
   nullableString(config.review.base, "review.base");
+  nullableString(config.review.model, "review.model");
+  reviewProfileName(config.review.profile, "review.profile");
+  for (const [name, profile] of Object.entries(config.review.profiles)) validateReviewProfile(profile, `review.profiles.${name}`);
   positiveInteger(config.task.maxTurns, "task.maxTurns", true);
   positiveNumber(config.task.maxBudgetUsd, "task.maxBudgetUsd", true);
   positiveInteger(config.jobs.backgroundTimeoutMs, "jobs.backgroundTimeoutMs", false);
@@ -112,5 +130,23 @@ function numberOrNull(value) { return value == null || value === "" ? null : Num
 function emptyToNull(value) { return typeof value === "string" && value.trim() ? value.trim() : null; }
 function plainObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function nullableString(value, name) { if (value != null && (typeof value !== "string" || !value.trim())) throw new Error(`${name} must be a non-empty string or null`); }
+function reviewProfileName(value, name) { if (!["quick", "standard", "deep"].includes(value)) throw new Error(`${name} must be one of: quick, standard, deep`); }
+function validateProfileMap(value, path) {
+  if (!plainObject(value)) throw new Error(`Configuration field review.profiles in ${path} must be an object`);
+  const allowed = new Set(["model", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs"]);
+  for (const [name, profile] of Object.entries(value)) {
+    reviewProfileName(name, `review.profiles key`);
+    if (!plainObject(profile)) throw new Error(`Configuration review.profiles.${name} must be an object`);
+    for (const key of Object.keys(profile)) if (!allowed.has(key)) throw new Error(`Unknown configuration field: review.profiles.${name}.${key}`);
+  }
+}
+function validateReviewProfile(profile, name) {
+  nullableString(profile.model, `${name}.model`);
+  positiveInteger(profile.maxTurns, `${name}.maxTurns`, false);
+  positiveInteger(profile.finalizeAtTurn, `${name}.finalizeAtTurn`, false);
+  if (profile.finalizeAtTurn >= profile.maxTurns) throw new Error(`${name}.finalizeAtTurn must be lower than maxTurns`);
+  positiveNumber(profile.maxBudgetUsd, `${name}.maxBudgetUsd`, false);
+  positiveInteger(profile.timeoutMs, `${name}.timeoutMs`, false);
+}
 function positiveInteger(value, name, nullable) { if (nullable && value == null) return; if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`); }
 function positiveNumber(value, name, nullable) { if (nullable && value == null) return; if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`); }

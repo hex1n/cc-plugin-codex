@@ -1,6 +1,6 @@
 {
   "name": "cc-plugin-codex",
-  "version": "0.1.0+codex.20260712003327",
+  "version": "0.1.0+codex.20260712105829",
   "description": "Delegate tasks and code reviews from Codex to Claude Code and manage detached jobs.",
   "author": {
     "name": "cc-plugin-codex contributors"

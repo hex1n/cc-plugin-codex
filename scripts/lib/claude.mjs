@@ -46,11 +46,11 @@ export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, conti
   if (result.code !== 0) throw new Error(result.stderr.trim() || `Claude exited with code ${result.code}`);
   return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid };
 }
-export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null }) {
-  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, purpose, disclosure });
+export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, reviewProfile = null }) {
+  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, purpose, disclosure, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd });
   let workerPid = null;
   try {
-    const timeoutMs = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, 3_600_000);
+    const timeoutMs = positiveTimeout(requestedTimeoutMs ?? backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, 3_600_000);
     await writeJobRequest(job, { profile, prompt, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, stream: true });
     const worker = fileURLToPath(new URL("../claude-job-worker.mjs", import.meta.url));
     ({ pid: workerPid } = await spawnDetachedSilent(process.execPath, [worker, cwd, job.id], { cwd, env: process.env }));
@@ -93,6 +93,8 @@ function validateSchema(value, schema, path) {
     if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${path} must be a number`);
     if (schema.minimum != null && value < schema.minimum) throw new Error(`${path} is below the minimum`);
     if (schema.maximum != null && value > schema.maximum) throw new Error(`${path} is above the maximum`);
+  } else if (schema.type === "boolean") {
+    if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
   }
   if (schema.enum && !schema.enum.includes(value)) throw new Error(`${path} must be one of: ${schema.enum.join(", ")}`);
 }
