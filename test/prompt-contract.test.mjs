@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { parseClaudeJson } from "../scripts/lib/claude.mjs";
-import { renderResult } from "../scripts/lib/render.mjs";
+import { renderError, renderResult } from "../scripts/lib/render.mjs";
 import { renderPrompt } from "../scripts/lib/prompts.mjs";
 
 test("Claude usage metadata survives parsing and result rendering", () => {
@@ -33,6 +33,26 @@ test("token totals fall back to aggregate usage and distinguish unavailable from
 test("plain results expose timing and turns without token usage", () => {
   const parsed = parseClaudeJson(JSON.stringify({ type: "result", result: "ok", num_turns: 3, duration_ms: 20, duration_api_ms: 10 }));
   assert.match(renderResult(parsed), /Usage: turns=3 duration_ms=20 api_ms=10/);
+});
+
+test("Claude error payloads preserve usage before raising", () => {
+  const payload = { type: "result", subtype: "error_max_budget_usd", is_error: true, session_id: "budget-session", total_cost_usd: 0.2, num_turns: 2, duration_ms: 1000, usage: { input_tokens: 10, output_tokens: 3 }, modelUsage: { sonnet: { inputTokens: 10, outputTokens: 3 } } };
+  assert.throws(() => parseClaudeJson(JSON.stringify(payload)), error => {
+    const rendered = JSON.parse(renderError(error, { json: true }));
+    assert.equal(rendered.error_kind, "max_budget");
+    assert.equal(rendered.upstream_error_subtype, "error_max_budget_usd");
+    assert.equal(rendered.session_id, "budget-session");
+    assert.equal(rendered.total_cost_usd, 0.2);
+    assert.equal(rendered.num_turns, 2);
+    assert.equal(rendered.usage.output_tokens, 3);
+    return true;
+  });
+});
+
+test("review schema rejects oversized structured output", () => {
+  const oversized = { verdict: "approve", summary: "x".repeat(4001), findings: [], next_steps: [], coverage: { files_examined: [], files_skipped: [], areas: [] }, uncertainty: "low", budget_exhausted: false, recommended_followup: { profile: "none", focus: [], reason: "" } };
+  const schema = resolve("schemas/review-output.schema.json");
+  assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: oversized }), { schemaPath: schema }), /maximum length/);
 });
 
 const companion = resolve("scripts/claude-companion.mjs");

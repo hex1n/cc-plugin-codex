@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
+import { boundedReviewManifest, collectReviewContext } from "../scripts/lib/git.mjs";
 
 const companion = resolve("scripts/claude-companion.mjs");
+const adapter = resolve("scripts/review-diff.mjs");
 
 function exec(command, args, { cwd, env = process.env } = {}) {
   return new Promise((resolveRun, reject) => {
@@ -44,4 +46,45 @@ test("review uses lightweight context when more than two files changed", async (
   assert.match(prompt, /Diff omitted from prompt/);
   for (const name of ["one.js", "two.js", "three.js"]) assert.match(prompt, new RegExp(name.replace(".", "\\.")));
   assert.doesNotMatch(prompt, /SHOULD_NOT_INLINE/);
+  assert.match(prompt, /review-diff\.mjs/);
+  assert.match(prompt, /do not use git -C/i);
+});
+
+test("large review manifests are bounded and report omissions", async () => {
+  const fx = await fixture();
+  for (let index = 0; index < 260; index += 1) await writeFile(join(fx.cwd, `file-${String(index).padStart(3, "0")}.js`), "export const changed = true;\n");
+  const prompt = await reviewPrompt(fx);
+  assert.match(prompt, /Changed files shown: 200 of 260/);
+  assert.match(prompt, /Files omitted: 60/);
+  assert.match(prompt, /Bounded diff stat:/);
+  assert.doesNotMatch(prompt, /file-259\.js/);
+});
+
+test("100k changed paths keep the review manifest below its emergency envelope", () => {
+  const names = Array.from({ length: 100_000 }, (_, index) => `src/generated/module-${String(index).padStart(6, "0")}.js`), manifest = boundedReviewManifest(names, "100000 files changed");
+  assert.ok(Buffer.byteLength(manifest) < 40 * 1024);
+  assert.match(manifest, /Changed files shown: 200 of 100000/);
+  assert.match(manifest, /Files omitted: 99800/);
+});
+
+test("review diff adapter includes committed changes from an explicit base", async () => {
+  const fx = await fixture(), base = (await exec("git", ["rev-parse", "HEAD"], fx)).stdout.trim();
+  await writeFile(join(fx.cwd, "base.txt"), "committed change\n"); await exec("git", ["add", "base.txt"], fx); await exec("git", ["commit", "--quiet", "-m", "change"], fx);
+  const result = await exec(process.execPath, [adapter, "--base", base, "--file", "base.txt", "--max-bytes", "4096"], fx);
+  assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /committed change/);
+});
+
+test("untracked review fingerprints change with same-size same-mtime content", async () => {
+  const fx = await fixture(), path = join(fx.cwd, "untracked.txt"), timestamp = new Date("2026-01-01T00:00:00Z");
+  await writeFile(path, "aaaa"); await utimes(path, timestamp, timestamp); const first = await collectReviewContext({ cwd: fx.cwd });
+  await writeFile(path, "bbbb"); await utimes(path, timestamp, timestamp); const second = await collectReviewContext({ cwd: fx.cwd });
+  assert.notEqual(first.fingerprint, second.fingerprint);
+});
+
+test("review diff adapter returns bounded tracked patches and rejects unsafe paths", async () => {
+  const fx = await fixture(); await writeFile(join(fx.cwd, "base.txt"), `changed\n${"x".repeat(4096)}\n`);
+  const bounded = await exec(process.execPath, [adapter, "--file", "base.txt", "--max-bytes", "512"], fx);
+  assert.equal(bounded.code, 0, bounded.stderr); assert.ok(Buffer.byteLength(bounded.stdout) < 640); assert.match(bounded.stdout, /omitted \d+ bytes/);
+  const unsafe = await exec(process.execPath, [adapter, "--file", "../outside", "--max-bytes", "512"], fx);
+  assert.equal(unsafe.code, 2); assert.match(unsafe.stderr, /outside repository/);
 });

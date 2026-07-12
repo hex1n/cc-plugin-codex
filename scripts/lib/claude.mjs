@@ -6,19 +6,22 @@ import { terminateProcessTree } from "./process.mjs";
 import { spawnDetachedSilent } from "./process.mjs";
 import { fileURLToPath } from "node:url";
 // Flags/JSON verified 2026-07-11 against Claude Code 2.1.207.
-export const CLAUDE_CLI = Object.freeze({ executable: process.env.CLAUDE_CODE_EXECUTABLE ?? "claude", baseArgs: ["--print", "--output-format", "json"], profiles: Object.freeze({ review: ["--safe-mode", "--permission-mode", "plan", "--allowedTools", "Read,Grep,Glob,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*)"], task: ["--permission-mode", "plan"] }) });
+export const REVIEW_DIFF_ADAPTER = fileURLToPath(new URL("../review-diff.mjs", import.meta.url));
+export const CLAUDE_CLI = Object.freeze({ executable: process.env.CLAUDE_CODE_EXECUTABLE ?? "claude", baseArgs: ["--print", "--output-format", "json"], profiles: Object.freeze({ review: ["--safe-mode", "--permission-mode", "plan", "--allowedTools", `Read,Grep,Glob,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(node ${REVIEW_DIFF_ADAPTER}:*)`], task: ["--permission-mode", "plan"] }) });
+export class ClaudeInvocationError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = "ClaudeInvocationError";
+    Object.assign(this, details);
+  }
+}
 export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   let payload;
   for (const line of stdout.split(/\r?\n/).filter(Boolean).reverse()) { try { payload = JSON.parse(line); break; } catch {} }
   if (!payload) throw new Error("Claude returned no valid JSON payload");
-  if (payload.is_error === true) throw new Error(`Claude error (${payload.subtype ?? "unknown"}): ${payload.result ?? "No error details returned"}`);
   const structuredOutput = payload.structured_output ?? null;
   const result = payload.result ?? structuredOutput ?? payload.message?.content?.map?.(part => part.text ?? "").join("") ?? payload.content;
-  if (schemaPath) {
-    if (structuredOutput === null) throw new Error("Claude returned no structured output for the requested schema");
-    validateSchema(structuredOutput, JSON.parse(readFileSync(schemaPath, "utf8")), "$output");
-  }
-  return {
+  const parsed = {
     text: typeof result === "string" ? result : JSON.stringify(result ?? payload),
     structuredOutput,
     sessionId: payload.session_id ?? payload.sessionId ?? null,
@@ -30,6 +33,12 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
     durationApiMs: payload.duration_api_ms ?? payload.durationApiMs ?? null,
     raw: payload
   };
+  if (payload.is_error === true) throw claudePayloadError(payload, parsed);
+  if (schemaPath) {
+    if (structuredOutput === null) throw new Error("Claude returned no structured output for the requested schema");
+    validateSchema(structuredOutput, JSON.parse(readFileSync(schemaPath, "utf8")), "$output");
+  }
+  return parsed;
 }
 export function claudeArgs(profile, prompt, { resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath, stream = false } = {}) {
   if (!CLAUDE_CLI.profiles[profile]) throw new Error(`Unknown Claude capability profile: ${profile}`);
@@ -43,7 +52,13 @@ export function claudeArgs(profile, prompt, { resume, continueSession, write, mo
 export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath }) {
   const result = await runCommand(CLAUDE_CLI.executable, claudeArgs(profile, prompt, { resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath }), { cwd, timeoutMs });
   if (result.timedOut) throw new Error(`Claude timed out after ${timeoutMs}ms`);
-  if (result.code !== 0) throw new Error(result.stderr.trim() || `Claude exited with code ${result.code}`);
+  if (result.code !== 0) {
+    try { parseClaudeJson(result.stdout); }
+    catch (error) {
+      if (error instanceof ClaudeInvocationError) { error.exitCode = result.code; error.signal = result.signal ?? null; throw error; }
+    }
+    throw new ClaudeInvocationError(result.stderr.trim() || `Claude exited with code ${result.code}`, { errorKind: "nonzero_exit", exitCode: result.code, signal: result.signal ?? null });
+  }
   return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid };
 }
 export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, reviewProfile = null }) {
@@ -70,6 +85,29 @@ export async function readClaudeJobResult(job) {
   try { return parseClaudeJson(stdout); } catch (error) { throw new Error(stderr.trim() || error.message); }
 }
 
+function claudePayloadError(payload, parsed) {
+  const subtype = payload.subtype ?? "unknown";
+  const mapping = subtype === "error_max_turns"
+    ? { errorKind: "max_turns", suggestedAction: "resume_or_increase_turns", message: "Claude reached the configured turn limit before producing a final result" }
+    : subtype === "error_max_budget_usd"
+      ? { errorKind: "max_budget", suggestedAction: "increase_budget_or_reduce_scope", message: "Claude reached the configured budget before producing a final result" }
+      : subtype === "error_during_execution"
+        ? { errorKind: "claude_execution", suggestedAction: "inspect_stderr_or_resume", message: "Claude reported an execution error" }
+        : { errorKind: "claude_result", suggestedAction: "inspect_stderr_or_resume", message: `Claude returned an error result (${subtype})` };
+  return new ClaudeInvocationError(mapping.message, {
+    errorKind: mapping.errorKind,
+    upstreamErrorSubtype: subtype,
+    suggestedAction: mapping.suggestedAction,
+    sessionId: parsed.sessionId,
+    usage: parsed.usage,
+    modelUsage: parsed.modelUsage,
+    totalCostUsd: parsed.totalCostUsd,
+    numTurns: parsed.numTurns,
+    durationMs: parsed.durationMs,
+    durationApiMs: parsed.durationApiMs
+  });
+}
+
 function validateSchema(value, schema, path) {
   if (schema.type === "object") {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${path} must be an object`);
@@ -80,12 +118,14 @@ function validateSchema(value, schema, path) {
   }
   if (schema.type === "array") {
     if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
+    if (schema.maxItems != null && value.length > schema.maxItems) throw new Error(`${path} exceeds the maximum item count`);
     for (let index = 0; index < value.length; index += 1) validateSchema(value[index], schema.items, `${path}[${index}]`);
     return;
   }
   if (schema.type === "string") {
     if (typeof value !== "string") throw new Error(`${path} must be a string`);
     if (schema.minLength && value.length < schema.minLength) throw new Error(`${path} must not be empty`);
+    if (schema.maxLength != null && value.length > schema.maxLength) throw new Error(`${path} exceeds the maximum length`);
   } else if (schema.type === "integer") {
     if (!Number.isInteger(value)) throw new Error(`${path} must be an integer`);
     if (schema.minimum != null && value < schema.minimum) throw new Error(`${path} is below the minimum`);

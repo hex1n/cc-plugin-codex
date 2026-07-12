@@ -36,6 +36,16 @@ test("Claude result subtypes map to actionable stable errors", () => {
     sessionId: "s"
   });
   assert.equal(errorForStreamResult({ type: "result", subtype: "success" }), null);
+  assert.deepEqual(errorForStreamResult({ type: "result", subtype: "error_max_budget_usd", is_error: true, session_id: "budget", total_cost_usd: 0.3, num_turns: 2, usage: { output_tokens: 9 } }), {
+    errorKind: "max_budget",
+    upstreamErrorSubtype: "error_max_budget_usd",
+    error: "Claude reached the configured budget before producing a final result",
+    suggestedAction: "increase_budget_or_reduce_scope",
+    sessionId: "budget",
+    usage: { output_tokens: 9 },
+    totalCostUsd: 0.3,
+    numTurns: 2,
+  });
 });
 
 test("append-only event log excludes prompt and tool inputs", async () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs, usage } from "./lib/args.mjs";
-import { CLAUDE_CLI, readClaudeJobResult, runClaude, startClaudeJob } from "./lib/claude.mjs";
+import { CLAUDE_CLI, REVIEW_DIFF_ADAPTER, readClaudeJobResult, runClaude, startClaudeJob } from "./lib/claude.mjs";
 import { collectReviewContext, findWorkspaceRoot } from "./lib/git.mjs";
 import { renderError, renderJob, renderJobs, renderResult } from "./lib/render.mjs";
 import { codexSessionId, listGlobalJobs, listJobs, readJob, transitionJob } from "./lib/state.mjs";
@@ -10,8 +10,8 @@ import { inspectClaudeSetup } from "./lib/setup.mjs";
 import { loadRuntimeConfig, setReviewGateEnabled } from "./lib/config.mjs";
 import { renderPrompt, schemaPath } from "./lib/prompts.mjs";
 import { readFile } from "node:fs/promises";
-async function reviewPrompt(c, options) { return renderPrompt("review", { TARGET_LABEL: c.range, REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
-export async function adversarialReviewPrompt(c, focus = "", options = {}) { return renderPrompt("adversarial-review", { TARGET_LABEL: c.range, USER_FOCUS: focus || "none", REVIEW_COLLECTION_GUIDANCE: c.inline ? "Inspect the supplied diff." : "Use the changed-file list and read-only tools to inspect the repository.", REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
+async function reviewPrompt(c, options) { return renderPrompt("review", { TARGET_LABEL: c.range, REVIEW_COLLECTION_GUIDANCE: collectionGuidance(c), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
+export async function adversarialReviewPrompt(c, focus = "", options = {}) { return renderPrompt("adversarial-review", { TARGET_LABEL: c.range, USER_FOCUS: focus || "none", REVIEW_COLLECTION_GUIDANCE: collectionGuidance(c), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${c.root}\n${c.diff}` }); }
 const refresh = reconcileJob;
 const ACTIVE = new Set(["starting", "running", "queued"]);
 async function execute(profile, renderedPrompt, cwd, options, outputSchema = null) {
@@ -97,7 +97,7 @@ async function dispatch({ command, positional, options }) {
     if (job.status === "running" || job.status === "starting") throw new Error(`Job ${job.id} is still ${job.status}`);
     if (job.status === "cancelled") throw new Error(`Job ${job.id} was cancelled`);
     if (job.status === "timed_out") throw new Error(`Job ${job.id} exceeded its ${job.timeoutMs}ms wall-clock timeout`);
-    if (job.status === "failed") throw new Error(job.error || `Job ${job.id} failed`);
+    if (job.status === "failed") throw jobFailureError(job);
     return renderResult(await readClaudeJobResult(job), { ...options, "review-profile": job.reviewProfile ?? null, "max-turns": job.maxTurns ?? null, "finalize-at-turn": job.finalizeAtTurn ?? null, "max-budget-usd": job.maxBudgetUsd ?? null, "timeout-ms": job.timeoutMs ?? null });
   }
   if (command === "cancel") {
@@ -147,6 +147,10 @@ function applyReviewRuntime(options, reviewConfig) {
 function reviewBudgetGuidance(options) {
   return `Review profile: ${options["review-profile"]}. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. Beginning with turn ${options["finalize-at-turn"]}, stop expanding the investigation. Use remaining turns to verify findings, enumerate examined and skipped files, state uncertainty and budget exhaustion, and recommend only a focused deeper follow-up when warranted.`;
 }
+function collectionGuidance(context) {
+  if (context.inline) return "Inspect the supplied diff. Use repository tools only for focused caller or invariant tracing.";
+  return `Use the bounded read-only adapter for patch content: node ${JSON.stringify(REVIEW_DIFF_ADAPTER)} --base ${JSON.stringify(context.adapterBase)} --file <repo-relative-path> [--file <path> ...] --max-bytes 65536. Use at most five files per call. The process already runs at the repository root. Run exactly one command per Bash tool call; do not use git -C, pipes, redirects, command separators, echo, tail, or shell composition. Use Read, Grep, or Glob for focused follow-up.`;
+}
 async function waitForJob(workspace, id, options) {
   const timeoutMs = options["timeout-ms"] == null ? 240_000 : positiveNumber(options["timeout-ms"], "--timeout-ms"), pollMs = options["poll-interval-ms"] == null ? 2_000 : positiveNumber(options["poll-interval-ms"], "--poll-interval-ms"), deadline = Date.now() + timeoutMs;
   while (true) { const job = await refresh(await readJob(workspace, id)); if (!ACTIVE.has(job.status)) return job; if (Date.now() >= deadline) throw new Error(`Timed out waiting for job ${id}`); await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now())))); }
@@ -167,5 +171,10 @@ function filterJobs(jobs, options) {
   return filtered;
 }
 function durationMs(value) { const match = /^(\d+)(m|h|d)$/.exec(String(value)); if (!match) throw new Error("--recent requires a duration such as 30m, 24h, or 7d"); return Number(match[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2]]; }
+function jobFailureError(job) {
+  const error = new Error(job.error || `Job ${job.id} failed`);
+  Object.assign(error, { errorKind: job.errorKind ?? null, upstreamErrorSubtype: job.upstreamErrorSubtype ?? null, suggestedAction: job.suggestedAction ?? null, exitCode: job.exitCode ?? null, signal: job.signal ?? null, sessionId: job.sessionId ?? null, usage: job.usage ?? null, modelUsage: job.modelUsage ?? null, totalCostUsd: job.totalCostUsd ?? null, numTurns: job.numTurns ?? null, durationMs: job.durationMs ?? null, durationApiMs: job.durationApiMs ?? null });
+  return error;
+}
 try { const parsed = parseArgs(process.argv.slice(2)); process.stdout.write(`${await dispatch(parsed)}\n`); }
 catch (error) { let json = false; try { json = parseArgs(process.argv.slice(2)).options.json; } catch {} process.stderr.write(`${renderError(error, { json })}\n`); process.exitCode = 1; }

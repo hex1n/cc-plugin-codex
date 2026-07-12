@@ -24,6 +24,7 @@ test("review terminates variadic CLI options before the prompt", async () => {
   const args = JSON.parse(await readFile(fx.invocation, "utf8")), marker = args.indexOf("--");
   assert.ok(args.includes("--safe-mode"));
   assert.ok(marker > args.indexOf("--allowedTools"));
+  assert.match(args[args.indexOf("--allowedTools") + 1], /review-diff\.mjs/);
   assert.match(args[marker + 1], /<context>/);
 });
 

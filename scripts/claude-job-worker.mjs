@@ -29,7 +29,7 @@ try {
   if (latest.status !== "running") process.exit(0);
   if (outcome.code !== 0) {
     const stderr = (await readFile(artifacts.stderrPath, "utf8")).trim();
-    await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: outcome.signal ? "signal" : streamError?.errorKind ?? "nonzero_exit", upstreamErrorSubtype: streamError?.upstreamErrorSubtype ?? null, suggestedAction: streamError?.suggestedAction ?? null, sessionId: streamError?.sessionId ?? current.sessionId, error: streamError?.error ?? (stderr || `Claude exited with code ${outcome.code}`), finishedAt: new Date().toISOString() }));
+    await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: outcome.signal ? "signal" : streamError?.errorKind ?? "nonzero_exit", upstreamErrorSubtype: streamError?.upstreamErrorSubtype ?? null, suggestedAction: streamError?.suggestedAction ?? null, sessionId: streamError?.sessionId ?? current.sessionId, usage: streamError?.usage ?? null, modelUsage: streamError?.modelUsage ?? null, totalCostUsd: streamError?.totalCostUsd ?? null, numTurns: streamError?.numTurns ?? null, durationMs: streamError?.durationMs ?? null, durationApiMs: streamError?.durationApiMs ?? null, error: streamError?.error ?? (stderr || `Claude exited with code ${outcome.code}`), finishedAt: new Date().toISOString() }));
     process.exit(0);
   }
   if (malformedStream) {

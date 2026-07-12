@@ -5,6 +5,6 @@
   "required": ["verdict", "summary"],
   "properties": {
     "verdict": { "type": "string", "enum": ["allow", "block"] },
-    "summary": { "type": "string", "minLength": 1 }
+    "summary": { "type": "string", "minLength": 1, "maxLength": 1000 }
   }
 }

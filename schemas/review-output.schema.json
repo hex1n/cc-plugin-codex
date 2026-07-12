@@ -5,34 +5,35 @@
   "required": ["verdict", "summary", "findings", "next_steps", "coverage", "uncertainty", "budget_exhausted", "recommended_followup"],
   "properties": {
     "verdict": { "type": "string", "enum": ["approve", "needs-attention"] },
-    "summary": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
     "findings": {
       "type": "array",
+      "maxItems": 40,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["severity", "title", "body", "file", "line_start", "line_end", "confidence", "recommendation"],
         "properties": {
           "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-          "title": { "type": "string", "minLength": 1 },
-          "body": { "type": "string", "minLength": 1 },
-          "file": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "body": { "type": "string", "minLength": 1, "maxLength": 4000 },
+          "file": { "type": "string", "minLength": 1, "maxLength": 1024 },
           "line_start": { "type": "integer", "minimum": 1 },
           "line_end": { "type": "integer", "minimum": 1 },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "recommendation": { "type": "string" }
+          "recommendation": { "type": "string", "maxLength": 2000 }
         }
       }
     },
-    "next_steps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "next_steps": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
     "coverage": {
       "type": "object",
       "additionalProperties": false,
       "required": ["files_examined", "files_skipped", "areas"],
       "properties": {
-        "files_examined": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "files_skipped": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "areas": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        "files_examined": { "type": "array", "maxItems": 500, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+        "files_skipped": { "type": "array", "maxItems": 500, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+        "areas": { "type": "array", "maxItems": 100, "items": { "type": "string", "minLength": 1, "maxLength": 500 } }
       }
     },
     "uncertainty": { "type": "string", "enum": ["low", "medium", "high"] },
@@ -43,8 +44,8 @@
       "required": ["profile", "focus", "reason"],
       "properties": {
         "profile": { "type": "string", "enum": ["none", "quick", "standard", "deep"] },
-        "focus": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "reason": { "type": "string" }
+        "focus": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+        "reason": { "type": "string", "maxLength": 2000 }
       }
     }
   }

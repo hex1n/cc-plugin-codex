@@ -60,6 +60,14 @@ test("invalid configuration fails before Claude starts", async () => {
   await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /maxTurns.*positive integer/i);
 });
 
+test("review profiles cannot exceed absolute safety ceilings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-config-ceiling-test-")), cwd = join(root, "repo"); await mkdir(join(cwd, ".codex"), { recursive: true });
+  await writeJson(join(cwd, ".codex", "cc-plugin-codex.json"), { review: { profiles: { deep: { maxTurns: 41 } } } });
+  await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /must not exceed 40/);
+  await writeJson(join(cwd, ".codex", "cc-plugin-codex.json"), { review: { profiles: { gate: { maxBudgetUsd: 0.6 } } } });
+  await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /Stop gate safety ceiling/);
+});
+
 test("review gate environment override is explicit and validated", async () => {
   const previous = process.env.CLAUDE_COMPANION_REVIEW_GATE;
   try {

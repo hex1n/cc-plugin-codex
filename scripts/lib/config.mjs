@@ -5,6 +5,8 @@ import { dirname, join, parse } from "node:path";
 const PLUGIN_DATA = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
 const CONFIG_ROOT = process.env.CLAUDE_COMPANION_CONFIG_ROOT ?? (PLUGIN_DATA ? join(PLUGIN_DATA, "config") : join(homedir(), ".codex", "claude-companion"));
 const REVIEW_GATE_PATH = join(CONFIG_ROOT, "review-gate.json");
+const REVIEW_GATE_CACHE_PATH = join(CONFIG_ROOT, "review-gate-cache.json");
+const REVIEW_HARD_LIMITS = Object.freeze({ maxTurns: 40, maxBudgetUsd: 5, timeoutMs: 900_000 });
 
 export async function readReviewGateConfig() {
   const environment = process.env.CLAUDE_COMPANION_REVIEW_GATE;
@@ -31,6 +33,17 @@ export async function setReviewGateEnabled(enabled) {
   return { enabled, path: REVIEW_GATE_PATH };
 }
 
+export async function readReviewGateCache() {
+  try { return JSON.parse(await readFile(REVIEW_GATE_CACHE_PATH, "utf8")); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+}
+
+export async function writeReviewGateCache(value) {
+  await mkdir(CONFIG_ROOT, { recursive: true });
+  await writeFile(REVIEW_GATE_CACHE_PATH, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  return { ...value, path: REVIEW_GATE_CACHE_PATH };
+}
+
 const DEFAULT_RUNTIME_CONFIG = Object.freeze({
   task: Object.freeze({ model: null, maxTurns: null, maxBudgetUsd: null }),
   review: Object.freeze({
@@ -38,6 +51,7 @@ const DEFAULT_RUNTIME_CONFIG = Object.freeze({
     model: null,
     profile: "standard",
     profiles: Object.freeze({
+      gate: Object.freeze({ model: null, maxTurns: 4, finalizeAtTurn: 3, maxBudgetUsd: 0.2, timeoutMs: 90_000 }),
       quick: Object.freeze({ model: null, maxTurns: 6, finalizeAtTurn: 4, maxBudgetUsd: 0.3, timeoutMs: 120_000 }),
       standard: Object.freeze({ model: null, maxTurns: 12, finalizeAtTurn: 9, maxBudgetUsd: 1, timeoutMs: 240_000 }),
       deep: Object.freeze({ model: null, maxTurns: 24, finalizeAtTurn: 20, maxBudgetUsd: 3, timeoutMs: 600_000 })
@@ -131,11 +145,12 @@ function emptyToNull(value) { return typeof value === "string" && value.trim() ?
 function plainObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function nullableString(value, name) { if (value != null && (typeof value !== "string" || !value.trim())) throw new Error(`${name} must be a non-empty string or null`); }
 function reviewProfileName(value, name) { if (!["quick", "standard", "deep"].includes(value)) throw new Error(`${name} must be one of: quick, standard, deep`); }
+function reviewProfileKey(value, name) { if (!["gate", "quick", "standard", "deep"].includes(value)) throw new Error(`${name} must be one of: gate, quick, standard, deep`); }
 function validateProfileMap(value, path) {
   if (!plainObject(value)) throw new Error(`Configuration field review.profiles in ${path} must be an object`);
   const allowed = new Set(["model", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs"]);
   for (const [name, profile] of Object.entries(value)) {
-    reviewProfileName(name, `review.profiles key`);
+    reviewProfileKey(name, `review.profiles key`);
     if (!plainObject(profile)) throw new Error(`Configuration review.profiles.${name} must be an object`);
     for (const key of Object.keys(profile)) if (!allowed.has(key)) throw new Error(`Unknown configuration field: review.profiles.${name}.${key}`);
   }
@@ -147,6 +162,10 @@ function validateReviewProfile(profile, name) {
   if (profile.finalizeAtTurn >= profile.maxTurns) throw new Error(`${name}.finalizeAtTurn must be lower than maxTurns`);
   positiveNumber(profile.maxBudgetUsd, `${name}.maxBudgetUsd`, false);
   positiveInteger(profile.timeoutMs, `${name}.timeoutMs`, false);
+  if (profile.maxTurns > REVIEW_HARD_LIMITS.maxTurns) throw new Error(`${name}.maxTurns must not exceed ${REVIEW_HARD_LIMITS.maxTurns}`);
+  if (profile.maxBudgetUsd > REVIEW_HARD_LIMITS.maxBudgetUsd) throw new Error(`${name}.maxBudgetUsd must not exceed ${REVIEW_HARD_LIMITS.maxBudgetUsd}`);
+  if (profile.timeoutMs > REVIEW_HARD_LIMITS.timeoutMs) throw new Error(`${name}.timeoutMs must not exceed ${REVIEW_HARD_LIMITS.timeoutMs}`);
+  if (name.endsWith(".gate") && (profile.maxTurns > 6 || profile.maxBudgetUsd > 0.5 || profile.timeoutMs > 120_000)) throw new Error(`${name} exceeds the Stop gate safety ceiling`);
 }
 function positiveInteger(value, name, nullable) { if (nullable && value == null) return; if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`); }
 function positiveNumber(value, name, nullable) { if (nullable && value == null) return; if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`); }

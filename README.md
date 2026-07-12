@@ -106,6 +106,7 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
     "model": "sonnet",
     "profile": "standard",
     "profiles": {
+      "gate": { "model": "fast-model", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.2, "timeoutMs": 90000 },
       "quick": { "model": "fast-model", "maxTurns": 6, "finalizeAtTurn": 4, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
       "standard": { "model": "balanced-model", "maxTurns": 12, "finalizeAtTurn": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
       "deep": { "model": "deep-model", "maxTurns": 24, "finalizeAtTurn": 20, "maxBudgetUsd": 3, "timeoutMs": 600000 }
@@ -115,15 +116,16 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
 }
 ```
 
-Unknown sections and fields, malformed JSON, and non-positive numeric limits are
-rejected before Claude is started. Write permission is deliberately not a
+Unknown sections and fields, malformed JSON, non-positive numeric limits, and
+review settings above the built-in safety ceilings are rejected before Claude
+is started. Write permission is deliberately not a
 configuration field: every write-capable task still requires `--write`.
 
 Plugin jobs and configuration live under Codex-provided `PLUGIN_DATA` when
 available. Standalone script execution falls back to the user's Codex data
 directory. Records are workspace-scoped and written atomically.
 
-Completed foreground and background results expose Claude's token usage,
+Completed results and structured budget failures expose Claude's token usage,
 per-model usage, total cost, turn count, and API/runtime duration when the
 installed Claude CLI provides those fields. JSON output also includes a
 cross-model `total_tokens` convenience value; older CLI payloads return `null`
@@ -151,6 +153,16 @@ small scans, `standard` for normal reviews, and `deep` for security, concurrency
 migrations, or core state machines. CLI budget flags override the selected
 profile for one invocation.
 
+Claude's `--max-turns` limits agentic turns; the CLI's reported `num_turns`
+uses a broader usage counter and may be numerically higher. The plugin treats
+the dollar budget and wall-clock timeout as the hard execution ceilings and
+preserves both counters for auditability.
+
+Large reviews use a bounded manifest instead of embedding every changed path.
+Claude can request focused patches through the bundled read-only diff adapter,
+whose output is capped independently of repository size. The existing 256 KiB
+inline emergency ceiling remains; there is no 96 KiB review coverage limit.
+
 ## Security model
 
 - Review, adversarial review, transfer, and default tasks use Claude plan mode
@@ -159,7 +171,9 @@ profile for one invocation.
   `acceptEdits` mode.
 - The optional Stop review gate is disabled by default. Enable it with
   `setup --enable-review-gate`, inspect and trust the hook in Codex, and disable
-  it with `setup --disable-review-gate`.
+  it with `setup --disable-review-gate`. The gate uses its own bounded profile
+  (4 turns, $0.20, 90 seconds by default) and caches unchanged verdicts for 30
+  minutes so repeated Stop events do not repeat the same model call.
 - Claude authentication remains in Claude Code's credential store; this plugin
   neither reads nor stores credentials.
 - Detached prompt request files are owner-only, consumed by the worker, and
