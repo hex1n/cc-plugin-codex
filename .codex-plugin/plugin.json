@@ -1,7 +1,7 @@
 {
   "name": "cc-plugin-codex",
-  "version": "0.1.0+codex.20260712105829",
-  "description": "Delegate tasks and code reviews from Codex to Claude Code and manage detached jobs.",
+  "version": "0.1.0+codex.20260714121148",
+  "description": "Delegate typed read, review, and isolated-write tasks from Codex to Claude Code.",
   "author": {
     "name": "cc-plugin-codex contributors"
   },
@@ -11,10 +11,11 @@
     "code-review"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Claude Code for Codex",
     "shortDescription": "Delegate work and reviews to Claude Code",
-    "longDescription": "Run read-only reviews, adversarial reviews, write-capable tasks, summary transfers, and detached Claude Code jobs from Codex.",
+    "longDescription": "Run typed read-only tasks, code and plan reviews, sandboxed isolated writes with explicit apply/discard, summary transfers, and detached Claude Code jobs from Codex.",
     "developerName": "cc-plugin-codex contributors",
     "category": "Developer Tools",
     "capabilities": [
@@ -23,6 +24,7 @@
     ],
     "defaultPrompt": [
       "Ask Claude Code to review my current changes.",
+      "Ask Claude Code to review this saved implementation plan.",
       "Delegate this implementation task to Claude Code.",
       "Show my Claude Code background jobs."
     ]

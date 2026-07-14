@@ -2,9 +2,10 @@
 import { appendFileSync, chmodSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { CLAUDE_CLI, claudeArgs, parseClaudeJson } from "./lib/claude.mjs";
+import { buildClaudeInvocation, parseClaudeJson } from "./lib/claude.mjs";
 import { appendStreamEvent, createStreamJsonParser, errorForStreamResult, progressForStreamEvent } from "./lib/claude-stream.mjs";
 import { jobArtifacts, readJob, takeJobRequest, transitionJob } from "./lib/state.mjs";
+import { finalizeWriteArtifact } from "./lib/patch-artifact.mjs";
 
 const [cwd, id] = process.argv.slice(2);
 if (!cwd || !id) process.exit(2);
@@ -16,7 +17,8 @@ try {
   let updateQueue = Promise.resolve();
   let malformedStream = false;
   let streamError = null;
-  const outcome = await runToLogs(CLAUDE_CLI.executable, claudeArgs(request.profile, request.prompt, request), { ...job, ...artifacts }, event => {
+  const invocation = buildClaudeInvocation(request.profile, request.prompt, request);
+  const outcome = await runToLogs(invocation, { ...job, ...artifacts, executionCwd: request.executionCwd ?? job.cwd }, event => {
     streamError = errorForStreamResult(event) ?? streamError;
     const progress = progressForStreamEvent(event); if (!progress) return;
     updateQueue = updateQueue.then(async () => {
@@ -38,10 +40,13 @@ try {
   }
   try {
     const parsed = parseClaudeJson(await readFile(artifacts.stdoutPath, "utf8"), { schemaPath: request.schemaPath ?? null });
+    const artifact = request.finalizeWrite ? await finalizeWriteArtifact(latest) : {};
     await transitionJob(cwd, id, ["running"], current => ({
       ...current,
+      ...artifact,
+      sandboxVerified: request.finalizeWrite ? true : current.sandboxVerified,
       status: "completed",
-      phase: "done",
+      phase: request.finalizeWrite ? "awaiting_apply" : "done",
       exitCode: 0,
       signal: outcome.signal,
       sessionId: parsed.sessionId,
@@ -99,18 +104,22 @@ async function waitForReady(workspace, jobId) {
   throw new Error(`Job ${jobId} did not enter running state`);
 }
 
-function runToLogs(command, args, record, onEvent, onMalformed) {
+function runToLogs(invocation, record, onEvent, onMalformed) {
   return new Promise((resolve, reject) => {
     for (const path of [record.stdoutPath, record.stderrPath]) {
       appendFileSync(path, "", { encoding: "utf8", mode: 0o600 });
       chmodSync(path, 0o600);
     }
-    const child = spawn(command, args, { cwd: record.cwd, env: process.env, shell: false, detached: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(invocation.command, invocation.args, { cwd: record.executionCwd, env: record.sandboxRequired ? sandboxedEnvironment() : process.env, shell: false, detached: false, stdio: ["pipe", "pipe", "pipe"] });
     const parser = createStreamJsonParser({ onEvent, onMalformed });
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => { appendFileSync(record.stdoutPath, chunk, "utf8"); parser.push(chunk); });
     child.stderr.on("data", chunk => { appendFileSync(record.stderrPath, chunk, "utf8"); });
+    child.stdin.on("error", error => { if (error.code !== "EPIPE") reject(error); });
+    child.stdin.end(invocation.stdin);
     child.once("error", reject);
     child.once("close", (code, signal) => { parser.end(); resolve({ code, signal }); });
   });
 }
+
+function sandboxedEnvironment() { const { CLAUDE_CODE_EXECUTABLE, NODE_OPTIONS, NODE_PATH, BASH_ENV, ENV, GIT_CONFIG_PARAMETERS, ...env } = process.env; for (const name of Object.keys(env)) if (/^GIT_CONFIG_(?:COUNT|KEY_|VALUE_)/.test(name)) delete env[name]; return env; }

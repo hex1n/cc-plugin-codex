@@ -21,7 +21,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-job-state-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude");
   await mkdir(cwd);
   await writeFile(fake, `#!/usr/bin/env node
-const raw=process.argv.at(-1),wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];
+let raw="";for await(const chunk of process.stdin)raw+=chunk;const wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];
 if(prompt==="fail"){console.error("deliberate failure");process.exit(7)}
 if(prompt==="max-turns"){console.log(JSON.stringify({type:"result",subtype:"error_max_turns",is_error:true,result:"turn limit",session_id:"resume-me"}));process.exit(1)}
 if(prompt==="max-budget"){console.log(JSON.stringify({type:"result",subtype:"error_max_budget_usd",is_error:true,result:"budget",session_id:"budget-session",total_cost_usd:0.25,num_turns:2,duration_ms:900,usage:{input_tokens:10,output_tokens:5}}));process.exit(1)}

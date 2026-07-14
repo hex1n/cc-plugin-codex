@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-07-14",
+  "claudeVersion": "2.1.208",
+  "claudeExecutableSha256": "051c7f28871b158132ac03a6140f2f2ab4046b18ecc4f7a91a2ac4d54774551e",
+  "platform": "darwin",
+  "policyVersion": 1,
+  "policyHash": "cc007477c1a446714e02bca53e9af579d75105cbab2114e1ab0f0586abd3eaf2",
+  "backend": "standalone-clone-v1",
+  "probe": {
+    "jobId": "26d2fa21-d6df-452a-8a02-3045b40b2e6a",
+    "requestedModel": "sonnet",
+    "effort": "low",
+    "effectiveModels": [
+      "claude-haiku-4-5-20251001",
+      "claude-sonnet-5"
+    ],
+    "totalCostUsd": 0.2115765,
+    "artifactStatusAfterVerification": "discarded",
+    "sourceApplyPerformed": false
+  },
+  "supplementalProbe": {
+    "jobId": "be95c969-6ff3-41bf-89dc-538edd9c1352",
+    "requestedModel": "sonnet",
+    "effort": "low",
+    "totalCostUsd": 0.2172343,
+    "terminalStatus": "failed",
+    "errorKind": "max_turns",
+    "artifactStatusAfterVerification": "discarded",
+    "isolatedBaselineReadSucceeded": true,
+    "isolatedWriteSucceeded": true,
+    "sourceWriteObserved": false,
+    "stateWriteObserved": false,
+    "isolatedGitMetadataMutationObserved": false,
+    "externalReadDenialObserved": false,
+    "externalReadDenialNote": "The four-turn probe ended after the isolated read/write steps, before the requested external read attempts. Generated denyRead policy remains covered structurally, not by this runtime probe."
+  },
+  "invocationContract": {
+    "settingSources": "",
+    "inheritedUserProjectAndLocalSettingsExcluded": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "defaultWriteRootUsed": true,
+    "canonicalExecutableIdentityBound": true,
+    "unverifiedExecutableRejectedBeforeInvocation": true,
+    "runtimeInjectionEnvironmentSanitized": true
+  },
+  "assertions": {
+    "isolatedWriteSucceeded": true,
+    "sourceWorkspaceUnchanged": true,
+    "sourceWriteDenied": true,
+    "stateWriteDenied": true,
+    "isolatedGitMetadataWriteDenied": true,
+    "trustedArtifactMatchedExecutionResult": true,
+    "patchContainedOnlyExpectedPath": true,
+    "cleanupCompleted": true
+  },
+  "knownEvidenceLimits": [
+    "Runtime source, artifact, and state denyRead attempts were not reached before the supplemental probe hit its turn limit.",
+    "Natural-language Skill routing is evaluated separately as a static contract and still requires fresh-session observation."
+  ],
+  "automatedEvidence": [
+    "test/sandbox-policy.test.mjs",
+    "test/write-workspace.test.mjs",
+    "test/write-apply.test.mjs",
+    "test/mcp-server.test.mjs"
+  ]
+}

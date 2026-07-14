@@ -1,5 +1,6 @@
 import { isProcessRunning, terminateProcessTree } from "./process.mjs";
 import { deleteJob, listJobs, transitionJob } from "./state.mjs";
+import { cleanupWriteArtifact, discardWriteArtifact } from "./patch-artifact.mjs";
 
 const DEFAULT_STARTING_TIMEOUT_MS = 60_000;
 
@@ -23,14 +24,23 @@ export async function reconcileJob(job, { now = Date.now() } = {}) {
 }
 
 export async function reconcileWorkspaceJobs(cwd, options) {
-  return Promise.all((await listJobs(cwd)).map(job => reconcileJob(job, options)));
+  const now = options?.now ?? Date.now(), jobs = await Promise.all((await listJobs(cwd)).map(job => reconcileJob(job, { ...options, now })));
+  const ttlMs = positiveTimeout(process.env.CLAUDE_COMPANION_WRITE_ARTIFACT_TTL_MS, 7 * 86_400_000);
+  return Promise.all(jobs.map(async job => {
+    if (job.write && job.cleanupPending && !job.recoveryRequired) return cleanupWriteArtifact(job);
+    if (job.write && !job.recoveryRequired && !["applied", "discarded", "partial_apply"].includes(job.artifactStatus) && !["starting", "running", "queued"].includes(job.status) && age(job.finishedAt ?? job.createdAt, now) >= ttlMs) return discardWriteArtifact({ workspaceRoot: cwd, jobId: job.id });
+    return job;
+  }));
 }
 
 export async function pruneWorkspaceJobs(cwd, { now = Date.now() } = {}) {
   const retentionDays = positiveTimeout(process.env.CLAUDE_COMPANION_RETENTION_DAYS, 30), maxCompleted = positiveTimeout(process.env.CLAUDE_COMPANION_MAX_COMPLETED_JOBS, 100), cutoff = now - retentionDays * 86_400_000;
   const terminal = (await listJobs(cwd)).filter(job => !["starting", "running", "queued", "corrupt"].includes(job.status)).sort((a, b) => Date.parse(b.finishedAt ?? b.createdAt) - Date.parse(a.finishedAt ?? a.createdAt));
-  const expired = terminal.filter((job, index) => index >= maxCompleted || Date.parse(job.finishedAt ?? job.createdAt) < cutoff);
-  await Promise.all(expired.map(deleteJob));
+  const expired = terminal.filter((job, index) => !job.recoveryRequired && job.artifactStatus !== "partial_apply" && (index >= maxCompleted || Date.parse(job.finishedAt ?? job.createdAt) < cutoff));
+  await Promise.all(expired.map(async job => {
+    const closed = job.write && !["applied", "discarded"].includes(job.artifactStatus) ? await discardWriteArtifact({ workspaceRoot: cwd, jobId: job.id }) : job;
+    if (!closed.cleanupPending) await deleteJob(closed);
+  }));
   return { pruned: expired.length };
 }
 

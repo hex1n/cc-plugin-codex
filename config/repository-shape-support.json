@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "backend": "standalone-clone-v1",
+  "supported": [
+    "clean repository with initial commit",
+    "staged and unstaged tracked changes",
+    "tracked deletion and rename",
+    "binary files and executable mode",
+    "untracked regular files and symlinks within quota"
+  ],
+  "excludedFromBaseline": [
+    "ignored files including .env",
+    "ignored dependency directories"
+  ],
+  "rejectedBeforeClaude": [
+    "repository without an initial commit",
+    "Git submodules",
+    "sparse checkout",
+    "Git LFS filter attributes",
+    "untracked special files",
+    "more than 10000 untracked files",
+    "more than 134217728 untracked bytes",
+    "write result with more than 10000 changed files",
+    "write result with more than 134217728 changed bytes"
+  ],
+  "evidence": "test/write-workspace.test.mjs"
+}

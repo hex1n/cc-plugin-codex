@@ -27,7 +27,7 @@ async function fixture() {
   await mkdir(nested, { recursive: true });
   const initialized = await new Promise((resolveInit, reject) => { const child = spawn("git", ["init", "--quiet"], { cwd, shell: false }); child.once("error", reject); child.once("close", code => resolveInit(code)); });
   assert.equal(initialized, 0);
-  await writeFile(fake, `#!/usr/bin/env node\nconst raw=process.argv.at(-1),wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];\nif (prompt === "sleep") { process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000); } else { console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"done:"+prompt,session_id:"session-123",usage:{input_tokens:10,output_tokens:2},modelUsage:{"claude-sonnet-test":{inputTokens:10,outputTokens:2}},total_cost_usd:0.12,num_turns:3,duration_ms:100,duration_api_ms:80})); }\n`);
+  await writeFile(fake, `#!/usr/bin/env node\nlet raw="";for await(const chunk of process.stdin)raw+=chunk;const wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];\nif (prompt === "sleep") { process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000); } else { console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"done:"+prompt,session_id:"session-123",usage:{input_tokens:10,output_tokens:2},modelUsage:{"claude-sonnet-test":{inputTokens:10,outputTokens:2}},total_cost_usd:0.12,num_turns:3,duration_ms:100,duration_api_ms:80})); }\n`);
   await chmod(fake, 0o755);
   return { cwd, nested, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state } };
 }

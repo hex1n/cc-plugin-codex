@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "evaluatedAt": "2026-07-14",
+  "method": "static-skill-contract",
+  "result": {
+    "samples": 20,
+    "passed": 20,
+    "failed": 0
+  },
+  "samples": [
+    { "id": 1, "utterance": "让 Claude 审查这个实施方案", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 2, "utterance": "用 Fable 5 review docs/plans/release.md", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 3, "utterance": "请 Sonnet 复核上面的设计", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 4, "utterance": "用 Opus 挑战这份迁移计划", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 5, "utterance": "cc-plugin-codex 审查 PRD", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 6, "utterance": "让 Claude Code 给这个 rollout plan 第二意见", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 7, "utterance": "Fable 审查一下 ADR 方案", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 8, "utterance": "用 sonnet medium effort 审查这份 spec", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 9, "utterance": "请 opus 深度复核 implementation plan", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 10, "utterance": "Claude reviewer 看一下 docs/design.md", "intent": "review-plan", "externalModelExplicit": true, "expectedRoute": "claude-plan-review", "outcome": "pass" },
+    { "id": 11, "utterance": "审查一下这个方案", "intent": "review-plan", "externalModelExplicit": false, "expectedRoute": "local-plan-review", "outcome": "pass" },
+    { "id": 12, "utterance": "帮我挑这份计划的问题", "intent": "review-plan", "externalModelExplicit": false, "expectedRoute": "local-plan-review", "outcome": "pass" },
+    { "id": 13, "utterance": "复核 PRD 是否可实施", "intent": "review-plan", "externalModelExplicit": false, "expectedRoute": "local-plan-review", "outcome": "pass" },
+    { "id": 14, "utterance": "review the rollout proposal", "intent": "review-plan", "externalModelExplicit": false, "expectedRoute": "local-plan-review", "outcome": "pass" },
+    { "id": 15, "utterance": "挑战一下上面的架构设计", "intent": "review-plan", "externalModelExplicit": false, "expectedRoute": "local-plan-review", "outcome": "pass" },
+    { "id": 16, "utterance": "按这个方案开始实现", "intent": "implement-plan", "externalModelExplicit": false, "expectedRoute": "implementation-flow", "outcome": "pass" },
+    { "id": 17, "utterance": "让 Claude 落地这份计划", "intent": "implement-plan", "externalModelExplicit": true, "expectedRoute": "claude-task", "outcome": "pass" },
+    { "id": 18, "utterance": "用 Fable 修改代码完成方案", "intent": "implement-plan", "externalModelExplicit": true, "expectedRoute": "claude-task", "outcome": "pass" },
+    { "id": 19, "utterance": "审查当前代码改动", "intent": "review-code", "externalModelExplicit": false, "expectedRoute": "code-review", "outcome": "pass" },
+    { "id": 20, "utterance": "让 Claude review git diff", "intent": "review-code", "externalModelExplicit": true, "expectedRoute": "claude-review", "outcome": "pass" }
+  ],
+  "limitation": "This evaluates documented Skill contracts, not nondeterministic natural-language routing in a fresh Codex session."
+}

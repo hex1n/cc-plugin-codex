@@ -15,8 +15,10 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-lifecycle-test-")), workspace = join(root, "workspace"), state = join(root, "state"); await mkdir(workspace); const cwd = await realpath(workspace), directory = join(state, createHash("sha256").update(cwd).digest("hex").slice(0, 16)); await mkdir(directory, { recursive: true });
   const oldStdout = join(directory, "old.stdout.log"), oldStderr = join(directory, "old.stderr.log"), old = { id: "old", cwd, profile: "task", status: "completed", pid: 99999999, stdoutPath: oldStdout, stderrPath: oldStderr, createdAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:01:00.000Z" };
   const active = { id: "active", cwd, profile: "task", status: "running", pid: process.pid, stdoutPath: join(directory, "active.stdout.log"), stderrPath: join(directory, "active.stderr.log"), createdAt: new Date().toISOString() };
-  await writeFile(join(directory, "old.json"), JSON.stringify(old)); await writeFile(oldStdout, "done"); await writeFile(oldStderr, ""); await writeFile(join(directory, "active.json"), JSON.stringify(active)); await writeFile(join(directory, "broken.json"), "{not json");
-  return { cwd, directory, env: { ...process.env, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_RETENTION_DAYS: "1", CLAUDE_COMPANION_MAX_COMPLETED_JOBS: "100" } };
+  const recoveryRoot = join(root, "recovery-workspace"), recovery = { id: "recovery", cwd, profile: "task", status: "completed", phase: "recovery_required", write: true, artifactStatus: "partial_apply", recoveryRequired: true, cleanupPending: false, isolatedRoot: recoveryRoot, createdAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:01:00.000Z" };
+  await mkdir(recoveryRoot); await writeFile(join(recoveryRoot, "evidence.txt"), "retain\n");
+  await writeFile(join(directory, "old.json"), JSON.stringify(old)); await writeFile(oldStdout, "done"); await writeFile(oldStderr, ""); await writeFile(join(directory, "active.json"), JSON.stringify(active)); await writeFile(join(directory, "recovery.json"), JSON.stringify(recovery)); await writeFile(join(directory, "broken.json"), "{not json");
+  return { cwd, directory, recoveryRoot, env: { ...process.env, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_RETENTION_DAYS: "1", CLAUDE_COMPANION_MAX_COMPLETED_JOBS: "100" } };
 }
 
 test("SessionEnd prunes expired terminal artifacts but preserves active and corrupt records", async () => {
@@ -24,6 +26,7 @@ test("SessionEnd prunes expired terminal artifacts but preserves active and corr
   assert.equal(output.code, 0, output.stderr); assert.deepEqual(JSON.parse(output.stdout), { continue: true, suppressOutput: true });
   assert.equal(await exists(join(fx.directory, "old.json")), false); assert.equal(await exists(join(fx.directory, "old.stdout.log")), false);
   assert.equal(await exists(join(fx.directory, "active.json")), true); assert.equal(await exists(join(fx.directory, "broken.json")), true);
+  assert.equal(await exists(join(fx.directory, "recovery.json")), true); assert.equal(await exists(join(fx.recoveryRoot, "evidence.txt")), true);
 });
 
 test("workspace status isolates a corrupt job record instead of failing", async () => {
@@ -43,7 +46,7 @@ test("global status discovers other workspaces and hides E2E jobs by default", a
   assert.deepEqual(new Set(JSON.parse(output.stdout).jobs.map(job => job.id)), new Set(["user-job", "active"]));
   assert.equal(JSON.parse(output.stdout).jobs.some(job => job.id === "e2e-job"), false);
   const withTests = await run(companion, ["status", "--global", "--include-test", "--json"], fx);
-  assert.deepEqual(new Set(JSON.parse(withTests.stdout).jobs.map(job => job.id)), new Set(["user-job", "e2e-job", "active", "old", "broken"]));
+  assert.deepEqual(new Set(JSON.parse(withTests.stdout).jobs.map(job => job.id)), new Set(["user-job", "e2e-job", "active", "recovery", "old", "broken"]));
 });
 
 test("reconciliation does not mislabel a worker after cancellation is requested", async () => {

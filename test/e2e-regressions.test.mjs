@@ -11,21 +11,21 @@ function run(command, args, { cwd = repo, env = process.env } = {}) { return new
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "cc-plugin-regression-")), bin = join(root, "bin"), workspace = join(root, "workspace"), invocation = join(root, "args.json"), claude = join(bin, "claude"), git = join(bin, "git");
   await mkdir(bin); await mkdir(workspace);
-  await writeFile(claude, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";\nconst args=process.argv.slice(2); if(args[0]==="--version"){console.log("9.9.9");process.exit(0)} if(args[0]==="auth"){console.log(JSON.stringify({loggedIn:false,authMethod:"none"}));process.exit(1)} writeFileSync(process.env.FAKE_ARGS,JSON.stringify(args)); const marker=args.indexOf("--"); if(marker<0||!args[marker+1]){console.error("prompt missing");process.exit(1)} console.log(JSON.stringify({type:"result",is_error:false,result:"review received",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"session"}));\n`);
+  await writeFile(claude, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";\nconst args=process.argv.slice(2); if(args[0]==="--version"){console.log("9.9.9");process.exit(0)} if(args[0]==="auth"){console.log(JSON.stringify({loggedIn:false,authMethod:"none"}));process.exit(1)} let prompt="";for await(const chunk of process.stdin)prompt+=chunk;writeFileSync(process.env.FAKE_ARGS,JSON.stringify({args,prompt})); if(!prompt){console.error("prompt missing");process.exit(1)} console.log(JSON.stringify({type:"result",is_error:false,result:"review received",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"session"}));\n`);
   await writeFile(git, `#!/usr/bin/env node\nconst a=process.argv.slice(2); if(a[0]==="rev-parse") console.log(process.env.FAKE_WORKSPACE); else if(a[0]==="status") process.stdout.write(""); else if(a[0]==="diff"&&a.includes("--name-only")) process.stdout.write("a\\0"); else if(a[0]==="diff") console.log("diff --git a/a b/a\\n+bug"); else process.exit(1);\n`);
   await chmod(claude, 0o755); await chmod(git, 0o755);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, CLAUDE_CODE_EXECUTABLE: claude, FAKE_ARGS: invocation, FAKE_WORKSPACE: workspace };
   return { root, workspace, invocation, claude, env };
 }
 
-test("review terminates variadic CLI options before the prompt", async () => {
+test("review keeps variadic tool options in argv and sends the prompt through stdin", async () => {
   const fx = await fixture(), result = await run(process.execPath, [companion, "review", "--json"], { cwd: fx.workspace, env: fx.env });
   assert.equal(result.code, 0, result.stderr);
-  const args = JSON.parse(await readFile(fx.invocation, "utf8")), marker = args.indexOf("--");
+  const { args, prompt } = JSON.parse(await readFile(fx.invocation, "utf8"));
   assert.ok(args.includes("--safe-mode"));
-  assert.ok(marker > args.indexOf("--allowedTools"));
+  assert.equal(args.indexOf("--"), -1);
   assert.match(args[args.indexOf("--allowedTools") + 1], /review-diff\.mjs/);
-  assert.match(args[marker + 1], /<context>/);
+  assert.match(prompt, /<context>/);
 });
 
 test("PLUGIN_DATA owns plugin job and configuration state", async () => {
@@ -48,7 +48,7 @@ test("setup reports a sandbox-visible auth miss as ambiguous", async () => {
 });
 
 test("stateful and Claude-backed skills use permission-aware escalation", async () => {
-  const required = ["claude-review", "claude-adversarial-review", "claude-task", "claude-status", "claude-result", "claude-cancel", "claude-setup"];
+  const required = ["claude-adversarial-review", "claude-setup"];
   for (const name of required) {
     const skill = await readFile(join(repo, "skills", name, "SKILL.md"), "utf8");
     assert.match(skill, /automatic-approval mode/, name);
@@ -61,11 +61,17 @@ test("stateful and Claude-backed skills use permission-aware escalation", async 
     assert.doesNotMatch(skill, /Request sandbox escalation/, name);
     assert.doesNotMatch(skill, /full-access mode, or when approvals are disabled/, name);
   }
-  assert.equal(required.length, 7);
-  for (const name of ["claude-task", "claude-review", "claude-adversarial-review"]) {
+  assert.equal(required.length, 2);
+  for (const name of ["claude-adversarial-review"]) {
     const skill = await readFile(join(repo, "skills", name, "SKILL.md"), "utf8");
     assert.match(skill, /retry only after a permission-profile change or host-provided authorization change/, name);
     assert.doesNotMatch(skill, /retry only after explicit consent/, name);
+  }
+  const mcpSkills = { "claude-task": "claude_task_readonly", "claude-review": "claude_review_changes", "claude-plan-review": "claude_review_plan", "claude-status": "claude_job_status", "claude-result": "claude_job_result", "claude-cancel": "claude_job_cancel" };
+  for (const [name, tool] of Object.entries(mcpSkills)) {
+    const skill = await readFile(join(repo, "skills", name, "SKILL.md"), "utf8");
+    assert.match(skill, new RegExp(tool), name);
+    assert.match(skill, /MCP is unavailable/i, name);
   }
   const readme = await readFile(join(repo, "README.md"), "utf8");
   assert.match(readme, /conversational consent alone does not change that boundary/);

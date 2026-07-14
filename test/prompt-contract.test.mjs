@@ -55,6 +55,19 @@ test("review schema rejects oversized structured output", () => {
   assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: oversized }), { schemaPath: schema }), /maximum length/);
 });
 
+test("plan review prompt and schema enforce categorized, located findings", async () => {
+  const rendered = await renderPrompt("plan-review", { SUBJECT_LABEL: "docs/plan.md", SUBJECT_FINGERPRINT: "a".repeat(64), REVIEW_BUDGET_GUIDANCE: "standard budget", PLAN_CONTENT: "# Plan\nShip it." });
+  assert.match(rendered.text, /immutable snapshot|immutable single-file snapshot/i); assert.match(rendered.text, /untrusted/i); assert.doesNotMatch(rendered.text, /{{[A-Z_]+}}/);
+  const schema = resolve("schemas/plan-review-output.schema.json"), base = { verdict: "needs-attention", summary: "one gap", findings: [{ category: "verification", severity: "medium", title: "No rollback test", body: "The plan omits the rollback oracle.", location: { file: "docs/plan.md", section: "Verification" }, confidence: 0.9, recommendation: "Add a rollback fixture." }], coverage: { areas_examined: ["verification"], areas_skipped: [] }, uncertainty: "low", budget_exhausted: false, recommended_followup: { profile: "none", focus: [], reason: "" } };
+  assert.equal(parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: base }), { schemaPath: schema }).structuredOutput.verdict, "needs-attention");
+  const missingLocation = structuredClone(base); delete missingLocation.findings[0].location;
+  assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: missingLocation }), { schemaPath: schema }), /location.*required|required.*location/i);
+  const invalidSeverity = structuredClone(base); invalidSeverity.findings[0].severity = "info";
+  assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: invalidSeverity }), { schemaPath: schema }), /severity.*one of|one of.*severity/i);
+  const tooMany = { ...base, findings: Array.from({ length: 41 }, () => base.findings[0]) };
+  assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: tooMany }), { schemaPath: schema }), /maximum item count/);
+});
+
 const companion = resolve("scripts/claude-companion.mjs");
 
 function exec(command, args, { cwd, env = process.env } = {}) {

@@ -17,7 +17,7 @@ function run(args, { cwd, env }) { return new Promise((resolveRun, reject) => { 
 async function fixture(timeoutMs) {
   const root = await mkdtemp(join(tmpdir(), "claude-timeout-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude"), childPid = join(root, "child.pid");
   await mkdir(cwd);
-  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";const raw=process.argv.at(-1),wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0]; if(prompt==="sleep"||prompt==="ignore-term"){writeFileSync(process.env.FAKE_CHILD_PID,String(process.pid));if(prompt==="ignore-term")process.on("SIGTERM",()=>{});setInterval(()=>{},1000)} else console.log(JSON.stringify({type:"result",is_error:false,result:"quick",session_id:"quick-session"}));\n`);
+  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";let raw="";for await(const chunk of process.stdin)raw+=chunk;const wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0]; if(prompt==="sleep"||prompt==="ignore-term"){writeFileSync(process.env.FAKE_CHILD_PID,String(process.pid));if(prompt==="ignore-term")process.on("SIGTERM",()=>{});setInterval(()=>{},1000)} else console.log(JSON.stringify({type:"result",is_error:false,result:"quick",session_id:"quick-session"}));\n`);
   await chmod(fake, 0o755);
   return { cwd, state, childPid, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS: String(timeoutMs), FAKE_CHILD_PID: childPid } };
 }

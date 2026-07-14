@@ -3,7 +3,7 @@
 [简体中文](README.zh-CN.md) | English
 
 `cc-plugin-codex` lets Codex delegate reviews and tasks to an authenticated
-Claude Code CLI. It is the reverse-direction companion to
+Claude Code CLI through typed MCP tools. It is the reverse-direction companion to
 `openai/codex-plugin-cc`: Codex remains the orchestrator, while Claude Code is
 invoked as a local subprocess.
 
@@ -11,8 +11,21 @@ The plugin has no runtime npm dependencies. It requires Node.js 18 or later,
 Codex with plugin support, and a working `claude` command whose authentication
 is already configured.
 
-It exposes eight skills: setup, review, adversarial review, task, transfer,
-status, result, and cancel.
+It exposes nine skills: setup, code review, plan review, adversarial review,
+task, transfer, status, result, and cancel.
+
+## Typed MCP tools
+
+The primary Codex integration is the local stdio MCP server declared by
+`.mcp.json`. It exposes separate tools for read-only tasks, code review, plan
+review, isolated write start, explicit apply/discard, and job lifecycle. The
+server imports the same application service as the compatibility CLI; it does
+not spawn a shell or the CLI adapter. Prompts are sent to Claude over stdin and
+never appear in its argv.
+
+Plan review accepts one UTF-8 repository file (maximum 256 KiB) and records only
+its label and SHA-256 fingerprint. Use `fable` or `claude-fable-5` explicitly;
+the conversational alias `fable5` is normalized by the Skill.
 
 ## Design reference
 
@@ -67,7 +80,9 @@ real plugin root, skills directory, and manifest path for diagnostics.
 The default task mode is the read-only `standard` profile: Sonnet, medium
 effort, 8 maximum turns, finalization from turn 6, a $1.50 soft budget, and a
 300-second timeout. Use `/claude-task --write` only when Claude should edit the
-workspace. Useful task controls include `--task-profile`, `--model`, `--effort`,
+workspace. A write task runs as a tracked job in an isolated standalone clone
+and stops at `awaiting_apply`; a separate explicit apply is required. Useful
+task controls include `--task-profile`, `--model`, `--effort`,
 `--max-turns`, `--finalize-at-turn`, `--context`,
 `--max-budget-usd`, `--prompt-file`, `--resume`,
 `--continue`, `--fresh`, and `--background`.
@@ -111,6 +126,7 @@ Environment variables:
 | `CLAUDE_COMPANION_STARTING_TIMEOUT_MS` | `60000` | Stale starting-record limit |
 | `CLAUDE_COMPANION_RETENTION_DAYS` | `30` | Finished-job retention age |
 | `CLAUDE_COMPANION_MAX_COMPLETED_JOBS` | `100` | Finished-job count retained per workspace |
+| `CLAUDE_COMPANION_WRITE_ARTIFACT_TTL_MS` | `604800000` | Time before an unapplied terminal write artifact is discarded on SessionStart |
 | `CLAUDE_COMPANION_REVIEW_GATE` | unset | Override review gate state (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`) |
 
 Runtime settings use this precedence: CLI flags, project configuration, user
@@ -197,8 +213,17 @@ inline emergency ceiling remains; there is no 96 KiB review coverage limit.
 
 - Review, adversarial review, transfer, and default tasks use Claude plan mode
   with read-oriented tools.
-- Write access requires the explicit task `--write` flag and uses Claude's
-  `acceptEdits` mode.
+- Write access requires the explicit task `--write` flag, an exact-version
+  sandbox compatibility preflight bound to the canonical Claude executable
+  hash, and Claude `acceptEdits` inside an isolated standalone clone. Source
+  files and index are unchanged until explicit apply.
+- Write success creates an owner-only binary patch artifact and stops at
+  `awaiting_apply`. Apply never stages, commits, merges, or pushes. Overlapping
+  source drift is blocked; unrelated drift needs a second confirmation tied to
+  the same patch hash. Discard removes the artifact and isolated workspace. If
+  apply starts but its result cannot be verified, the job enters
+  `recovery_required`: no automatic rollback or cleanup is attempted, and the
+  retained artifact must be inspected manually.
 - The optional Stop review gate is disabled by default. Enable it with
   `setup --enable-review-gate`, inspect and trust the hook in Codex, and disable
   it with `setup --disable-review-gate`. The gate uses its own bounded profile
@@ -225,6 +250,8 @@ node scripts/claude-companion.mjs status --global --status failed
 node scripts/claude-companion.mjs status <job-id> --wait --timeout-ms 300000
 node scripts/claude-companion.mjs result
 node scripts/claude-companion.mjs cancel
+node scripts/claude-companion.mjs apply <write-job-id>
+node scripts/claude-companion.mjs discard <write-job-id>
 ```
 
 `status` without an ID returns the current Codex session's latest job; `--all`
@@ -251,9 +278,9 @@ replaced with native Windows executables.
 
 | Platform | Status | Notes |
 | --- | --- | --- |
-| macOS | Locally verified | Full source tests and Claude CLI E2E are supported |
-| Linux | CI-targeted | Requires a locally authenticated Claude Code CLI |
-| Windows | Syntax CI-targeted | Metadata and syntax are checked; behavioral fixture portability remains open |
+| macOS | Write verified for Claude 2.1.208 | Seatbelt + compatibility manifest; other versions fail closed |
+| Linux | Read/review CI-targeted; write unavailable by default | Write needs bwrap+socat and a verified manifest entry |
+| Windows | Read/review syntax CI-targeted; write unsupported | No native write sandbox is claimed |
 
 CI behavioral coverage currently validates macOS and Linux. A real Claude
 invocation still depends on credentials and local Claude Code behavior and is
@@ -267,7 +294,7 @@ Run the self-contained release check:
 npm run check
 ```
 
-It checks JavaScript syntax, metadata alignment, the eight-skill surface, and
+It checks JavaScript syntax, metadata alignment, the nine-skill surface, and
 the complete Node test suite. `node scripts/check.mjs --syntax-only` performs
 only metadata and syntax checks.
 

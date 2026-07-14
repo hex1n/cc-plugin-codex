@@ -9,8 +9,9 @@ const companion = resolve("scripts/claude-companion.mjs");
 function run(args, fx) { return new Promise((resolveRun, reject) => { const child = spawn(process.execPath, [companion, ...args], { cwd: fx.cwd, env: fx.env, shell: false, stdio: ["ignore", "pipe", "pipe"] }); let stdout = "", stderr = ""; child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8"); child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; }); child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr })); }); }
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-tracked-jobs-test-")), cwd = join(root, "workspace"), state = join(root, "state"), capture = join(root, "args.json"), fake = join(root, "claude"); await mkdir(cwd);
+  await command("git", ["init", "--quiet"], cwd); await command("git", ["config", "user.email", "test@example.invalid"], cwd); await command("git", ["config", "user.name", "Test"], cwd); await writeFile(join(cwd, "base.txt"), "base\n"); await command("git", ["add", "base.txt"], cwd); await command("git", ["commit", "--quiet", "-m", "base"], cwd);
   await writeFile(fake, `#!/usr/bin/env node
-import {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));
+import {writeFileSync} from "node:fs";if(process.argv[2]==="--version"){console.log("2.1.208 (Claude Code)");process.exit(0)}writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));
 const events=[
  {type:"system",subtype:"init",session_id:"stream-session"},
  {type:"assistant",message:{content:[{type:"tool_use",name:"Read",input:{file_path:"a.js"}}]}},
@@ -20,11 +21,13 @@ const events=[
 ];
 for(const event of events){console.log(JSON.stringify(event));await new Promise(r=>setTimeout(r,180))}
 `); await chmod(fake, 0o755);
-  return { cwd, state, capture, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CAPTURE_ARGS: capture } };
+  return { cwd, state, capture, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_WRITE_ROOT: join(root, "write-workspaces"), CAPTURE_ARGS: capture } };
 }
 
+function command(executable, args, cwd) { return new Promise((resolveCommand, reject) => { const child = spawn(executable, args, { cwd, shell: false, stdio: "ignore" }); child.once("error", reject); child.once("close", code => code === 0 ? resolveCommand() : reject(new Error(`${executable} exited ${code}`))); }); }
+
 test("background stream exposes phases and status --wait completes", async () => {
-  const fx = await fixture(), launched = await run(["task", "implement and verify", "--write", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
+  const fx = await fixture(), launched = await run(["task", "inspect and verify", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
   const id = JSON.parse(launched.stdout).job.id, deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
     const status = await run(["status", id, "--json"], fx); assert.equal(status.code, 0, status.stderr); const job = JSON.parse(status.stdout).job;

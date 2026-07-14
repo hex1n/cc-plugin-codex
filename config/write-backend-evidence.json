@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "defaultBackend": "standalone-clone-v1",
+  "authorizedBackends": ["standalone-clone-v1"],
+  "worktreeAuthorized": false,
+  "properties": {
+    "standaloneObjectStore": true,
+    "localCloneOptimizationDisabled": true,
+    "hardlinksDisabled": true,
+    "alternatesAbsent": true,
+    "sourceSnapshotVerifiedBeforeAndAfterPrepare": true,
+    "executionAndArtifactClonesSeparated": true,
+    "hostGitNeverReadsExecutionCloneMetadata": true,
+    "artifactClonePopulatedByFilesystemCopy": true,
+    "hostGitSystemAndGlobalConfigDisabled": true,
+    "gitFilterAttributesRejected": true,
+    "resultQuotaAppliesToChangedContentOnly": true,
+    "partialApplyArtifactsRequireManualRecovery": true,
+    "automaticApplyRollbackDisabled": true
+  },
+  "evidence": [
+    "test/write-workspace.test.mjs",
+    "test/write-apply.test.mjs",
+    "test/mcp-server.test.mjs"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cc-plugin-codex": {
+      "command": "node",
+      "args": ["./mcp/server.mjs"],
+      "cwd": "."
+    }
+  }
+}

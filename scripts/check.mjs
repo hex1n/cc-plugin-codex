@@ -32,11 +32,11 @@ async function validateMetadata() {
   if (plugin.name !== pkg.name) throw new Error("package and plugin names differ");
   if (plugin.version.split("+")[0] !== pkg.version) throw new Error("package and plugin base versions differ");
   const skills = await readdir(resolve(root, "skills"), { withFileTypes: true });
-  if (skills.filter(entry => entry.isDirectory()).length !== 8) throw new Error("plugin must expose exactly 8 skills");
+  if (skills.filter(entry => entry.isDirectory()).length !== 9) throw new Error("plugin must expose exactly 9 skills");
 }
 
 await validateMetadata();
-const files = (await Promise.all(["scripts", "hooks", "test"].map(collectMjs))).flat().sort();
+const files = (await Promise.all(["scripts", "hooks", "mcp", "test"].map(collectMjs))).flat().sort();
 for (const file of files) {
   const code = await run(["--check", file]);
   if (code !== 0) process.exit(code);

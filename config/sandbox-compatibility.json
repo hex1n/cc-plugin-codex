@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": 1,
+  "policyHash": "cc007477c1a446714e02bca53e9af579d75105cbab2114e1ab0f0586abd3eaf2",
+  "entries": [
+    {
+      "claudeVersion": "2.1.208",
+      "platform": "darwin",
+      "executableSha256": "051c7f28871b158132ac03a6140f2f2ab4046b18ecc4f7a91a2ac4d54774551e",
+      "backend": "standalone-clone-v1",
+      "enforcementVerified": true,
+      "verifiedAt": "2026-07-14",
+      "evidence": [
+        "test/sandbox-policy.test.mjs",
+        "test/write-workspace.test.mjs",
+        "test/mcp-server.test.mjs",
+        "config/sandbox-enforcement-evidence.json",
+        "config/write-backend-evidence.json"
+      ]
+    }
+  ]
+}

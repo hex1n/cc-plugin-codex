@@ -42,17 +42,19 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   }
   return parsed;
 }
-export function claudeArgs(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false } = {}) {
+export function buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false, settingsPath = null, settingSources = null, claudeExecutable = CLAUDE_CLI.executable } = {}) {
   if (!CLAUDE_CLI.profiles[profile]) throw new Error(`Unknown Claude capability profile: ${profile}`);
   const profileArgs = profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile];
   const session = resume ? ["--resume", resume] : continueSession ? ["--continue"] : [];
   const runtime = [...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : []), ...(maxTurns ? ["--max-turns", String(maxTurns)] : []), ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : [])];
   const schema = schemaPath ? ["--json-schema", schemaForClaudeCli(schemaPath)] : [];
+  const settings = [...(settingSources !== null ? ["--setting-sources", settingSources] : []), ...(settingsPath ? ["--settings", settingsPath] : [])];
   const baseArgs = stream ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
-  return [...baseArgs, ...profileArgs, ...session, ...runtime, ...schema, "--", prompt];
+  return { command: claudeExecutable, args: [...baseArgs, ...profileArgs, ...session, ...runtime, ...schema, ...settings], stdin: prompt };
 }
 export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath }) {
-  const result = await runCommand(CLAUDE_CLI.executable, claudeArgs(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath }), { cwd, timeoutMs });
+  const invocation = buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath });
+  const result = await runCommand(invocation.command, invocation.args, { cwd, timeoutMs, stdin: invocation.stdin });
   if (result.timedOut) throw new Error(`Claude timed out after ${timeoutMs}ms`);
   if (result.code !== 0) {
     try { parseClaudeJson(result.stdout); }
@@ -67,13 +69,13 @@ export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, conti
     throw error;
   }
 }
-export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null }) {
-  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, effort, purpose, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd });
+export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null, settingsPath = null, settingSources = null, claudeExecutable = CLAUDE_CLI.executable, finalizeWrite = false, metadata = {} }) {
+  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, effort, purpose, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, metadata });
   let workerPid = null;
   try {
     const requested = positiveTimeout(requestedTimeoutMs, null), background = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, null);
     const timeoutMs = requested && background ? Math.min(requested, background) : requested ?? background ?? 3_600_000;
-    await writeJobRequest(job, { profile, prompt, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, stream: true });
+    await writeJobRequest(job, { profile, prompt, executionCwd, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, settingsPath, settingSources, claudeExecutable, finalizeWrite, stream: true });
     const worker = fileURLToPath(new URL("../claude-job-worker.mjs", import.meta.url));
     ({ pid: workerPid } = await spawnDetachedSilent(process.execPath, [worker, cwd, job.id], { cwd, env: process.env }));
     const running = await saveJob({ ...job, pid: workerPid, workerPid, status: "running", timeoutMs, deadlineAt: new Date(Date.now() + timeoutMs).toISOString(), startedAt: new Date().toISOString() });
