@@ -332,3 +332,15 @@ Routing eval: <sample count and outcomes>
 Online Claude/Fable validation: not run | authorized result with cost
 Known limitations: <remaining items>
 ```
+
+## 实施完成记录
+
+```text
+Status: implemented
+Commit: 3c6dfac36e513a7691d2e78eca029a675e4f4620
+Tests: npm run check (113/113); git diff --check; temporary installed-cache MCP handshake (9 tools); public MCP write discard/apply E2E
+Installed plugin version: 0.1.0+codex.20260714121746
+Routing eval: 20/20 static Skill-contract samples passed; fresh-session natural-language routing remains an explicit observation item
+Online Claude/Fable validation: authorized Claude Sonnet probes cost $0.6492954 total; one isolated write completed and was discarded, two bounded probes ended at budget/turn limits and were discarded; no source apply; upstream auxiliary Haiku usage was observed
+Known limitations: runtime external denyRead attempts were not reached before the supplemental probe hit its turn limit; no final Fable cost comparison was run
+```

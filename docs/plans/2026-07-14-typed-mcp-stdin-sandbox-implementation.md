@@ -517,3 +517,21 @@ Online Codex/Claude validation: not run | authorized result and cost
 Pending write artifacts: 0 | <explicit list>
 Known limitations: <remaining items>
 ```
+
+## 实施完成记录
+
+```text
+Status: implemented
+Commits: 3c6dfac36e513a7691d2e78eca029a675e4f4620 (runtime, MCP, plan review, isolated write, tests)
+Tests: npm run check (113/113); git diff --check; targeted security reviews PASS; temporary CODEX_HOME install, installed-cache CLI help and MCP handshake PASS; source/cache key-file cmp PASS
+MCP tools exposed: claude_review_changes, claude_review_plan, claude_task_readonly, claude_write_task_start, claude_write_task_apply, claude_write_task_discard, claude_job_status, claude_job_result, claude_job_cancel
+Sandbox platforms verified: darwin + Claude Code 2.1.208 + canonical executable SHA-256 051c7f28871b158132ac03a6140f2f2ab4046b18ecc4f7a91a2ac4d54774551e; other versions/platforms fail closed
+Sandbox compatibility manifest: policy v1 / cc007477c1a446714e02bca53e9af579d75105cbab2114e1ab0f0586abd3eaf2 / config/sandbox-compatibility.json
+Write workspace backend: standalone-clone-v1; independent execution and trusted artifact clones; host Git config isolated; no automatic rollback after apply starts
+Repository shapes supported/rejected: config/repository-shape-support.json
+Runtime service contract: v1-ready @ 3c6dfac36e513a7691d2e78eca029a675e4f4620
+Installed plugin version: 0.1.0+codex.20260714121746
+Online Codex/Claude validation: three authorized Sonnet probes cost $0.6492954 total; one completed awaiting_apply and was discarded, two bounded probes failed at budget/turn limits and were discarded; no source apply; auxiliary Haiku usage observed
+Pending write artifacts: 0 from implementation validation
+Known limitations: runtime external denyRead attempts were not reached before the supplemental probe turn limit; fresh-session natural-language Skill routing remains unobserved; Linux/WSL2 write stays fail-closed until an exact platform/version/backend entry is verified; Claude upgrades require a new executable hash entry
+```

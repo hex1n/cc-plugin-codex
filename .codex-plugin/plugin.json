@@ -1,6 +1,6 @@
 {
   "name": "cc-plugin-codex",
-  "version": "0.1.0+codex.20260714121148",
+  "version": "0.1.0+codex.20260714121746",
   "description": "Delegate typed read, review, and isolated-write tasks from Codex to Claude Code.",
   "author": {
     "name": "cc-plugin-codex contributors"
