@@ -27,18 +27,28 @@ async function fixture() {
   await mkdir(nested, { recursive: true });
   const initialized = await new Promise((resolveInit, reject) => { const child = spawn("git", ["init", "--quiet"], { cwd, shell: false }); child.once("error", reject); child.once("close", code => resolveInit(code)); });
   assert.equal(initialized, 0);
-  await writeFile(fake, `#!/usr/bin/env node\nconst raw=process.argv.at(-1),prompt=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw;\nif (prompt === "sleep") { process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000); } else { console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"done:"+prompt,session_id:"session-123"})); }\n`);
+  await writeFile(fake, `#!/usr/bin/env node\nconst raw=process.argv.at(-1),wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];\nif (prompt === "sleep") { process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000); } else { console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,result:"done:"+prompt,session_id:"session-123",usage:{input_tokens:10,output_tokens:2},modelUsage:{"claude-sonnet-test":{inputTokens:10,outputTokens:2}},total_cost_usd:0.12,num_turns:3,duration_ms:100,duration_api_ms:80})); }\n`);
   await chmod(fake, 0o755);
   return { cwd, nested, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state } };
 }
 
 test("detached jobs can be listed and their result read", async () => {
   const fx = await fixture();
-  const launched = await run(["task", "hello", "--background", "--json"], { ...fx, cwd: fx.nested });
+  const launched = await run(["task", "hello", "--model", "fable", "--background", "--json"], { ...fx, cwd: fx.nested });
   assert.equal(launched.code, 0, launched.stderr);
   const id = JSON.parse(launched.stdout).job.id;
   const completed = await poll(() => run(["status", id, "--json"], fx), value => JSON.parse(value.stdout).job.status === "completed");
-  assert.equal(JSON.parse(completed.stdout).job.profile, "task");
+  const completedJob = JSON.parse(completed.stdout).job;
+  assert.equal(completedJob.profile, "task");
+  assert.equal(completedJob.task_profile, "standard");
+  assert.equal(completedJob.requested_model, "fable");
+  assert.deepEqual(completedJob.effective_models, ["claude-sonnet-test"]);
+  assert.equal(completedJob.total_cost_usd, 0.12);
+  assert.equal(completedJob.num_turns, 3);
+  assert.equal(completedJob.duration_ms, 100);
+  assert.equal(completedJob.duration_api_ms, 80);
+  assert.equal(completedJob.usage.output_tokens, 2);
+  assert.equal(completedJob.model_usage["claude-sonnet-test"].inputTokens, 10);
   const [workspaceState] = await readdir(fx.env.CLAUDE_COMPANION_STATE_ROOT);
   const stateRecord = JSON.parse(await readFile(join(fx.env.CLAUDE_COMPANION_STATE_ROOT, workspaceState, `${id}.json`), "utf8"));
   assert.equal("prompt" in stateRecord, false);
@@ -78,4 +88,18 @@ test("implicit status and result prefer the current Codex session", async () => 
   await poll(() => run(["status", second, "--json"], sessionB), value => JSON.parse(value.stdout).job.status === "completed");
   assert.equal(JSON.parse((await run(["status", "--json"], sessionA)).stdout).job.id, first);
   assert.equal(JSON.parse((await run(["result", "--json"], sessionA)).stdout).result, "done:first");
+});
+
+test("an explicit background resume links jobs and exposes cumulative chain cost", async () => {
+  const fx = await fixture();
+  const first = JSON.parse((await run(["task", "first", "--background", "--json"], fx)).stdout).job.id;
+  await poll(() => run(["status", first, "--json"], fx), value => JSON.parse(value.stdout).job.status === "completed");
+  const second = JSON.parse((await run(["task", "second", "--resume", "session-123", "--background", "--json"], fx)).stdout).job.id;
+  const completed = await poll(() => run(["status", second, "--json"], fx), value => JSON.parse(value.stdout).job.status === "completed");
+  const job = JSON.parse(completed.stdout).job;
+  assert.equal(job.parent_job_id, first);
+  assert.equal(job.cumulative_chain_cost_usd, 0.24);
+  const result = JSON.parse((await run(["result", second, "--json"], fx)).stdout);
+  assert.equal(result.parent_job_id, first);
+  assert.equal(result.cumulative_chain_cost_usd, 0.24);
 });

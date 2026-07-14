@@ -16,26 +16,23 @@ const refresh = reconcileJob;
 const ACTIVE = new Set(["starting", "running", "queued"]);
 async function execute(profile, renderedPrompt, cwd, options, outputSchema = null) {
   const prompt = typeof renderedPrompt === "string" ? renderedPrompt : renderedPrompt.text, promptMeta = typeof renderedPrompt === "string" ? null : renderedPrompt;
-  const runtime = { resume: options.resume, continueSession: options.continue, write: options.write, model: options.model, maxTurns: options["max-turns"], finalizeAtTurn: options["finalize-at-turn"], maxBudgetUsd: options["max-budget-usd"], reviewProfile: options["review-profile"], timeoutMs: options["timeout-ms"] == null ? undefined : positiveNumber(options["timeout-ms"], "--timeout-ms"), backgroundTimeoutMs: options.backgroundTimeoutMs };
+  const runtime = { resume: options.resume, continueSession: options.continue, write: options.write, model: options.model, effort: options.effort, maxTurns: options["max-turns"], finalizeAtTurn: options["finalize-at-turn"], maxBudgetUsd: options["max-budget-usd"], taskProfile: options["task-profile"], reviewProfile: options["review-profile"], timeoutMs: options["timeout-ms"] == null ? undefined : positiveNumber(options["timeout-ms"], "--timeout-ms"), backgroundTimeoutMs: options.backgroundTimeoutMs };
   if (options.background) return renderJob(await startClaudeJob({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema, promptMeta, purpose: options.purpose ?? "user", disclosure: options.disclosure ?? null }), options);
   return renderResult(await runClaude({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema }), options);
 }
 async function dispatch({ command, positional, options }) {
   if (options.help || !command) return usage();
   const runtimeConfig = await loadRuntimeConfig({ cwd: process.cwd() });
-  if (command === "task") {
-    options.model ??= runtimeConfig.task.model;
-    options["max-turns"] ??= runtimeConfig.task.maxTurns;
-    options["max-budget-usd"] ??= runtimeConfig.task.maxBudgetUsd;
-  }
+  if (command === "task") applyTaskRuntime(options, runtimeConfig.task);
   const reviewCommand = command === "review" || command === "adversarial-review";
   if (reviewCommand) applyReviewRuntime(options, runtimeConfig.review);
   options.backgroundTimeoutMs = runtimeConfig.jobs.backgroundTimeoutMs;
   if (options.background && options.wait) throw new Error("--background and --wait cannot be used together");
   if (options.resume && command !== "task") throw new Error("--resume is only supported by task");
   if (options.model && command !== "task" && !reviewCommand) throw new Error("--model is only supported by task, review, and adversarial-review");
+  if (options.effort && command !== "task" && !reviewCommand) throw new Error("--effort is only supported by task, review, and adversarial-review");
   if (options["review-profile"] && !reviewCommand) throw new Error("--review-profile is only supported by review and adversarial-review");
-  if ((options.write || options.continue || options.fresh || options["prompt-file"] || options.context) && command !== "task") throw new Error("These runtime options are only supported by task");
+  if ((options.write || options.continue || options.fresh || options["prompt-file"] || options.context || options["task-profile"]) && command !== "task") throw new Error("These runtime options are only supported by task");
   if ((options["max-turns"] || options["max-budget-usd"] || options["finalize-at-turn"]) && command !== "task" && !reviewCommand) throw new Error("Budget options are only supported by task, review, and adversarial-review");
   if (command === "review") { if (positional.length) throw new Error(`Unexpected review arguments: ${positional.join(" ")}`); const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await reviewPrompt(context, options), context.root, options, schemaPath("review-output")); }
   if (command === "adversarial-review") { const context = await collectReviewContext({ cwd: process.cwd(), base: options.base }); return execute("review", await adversarialReviewPrompt(context, positional.join(" ").trim(), options), context.root, options, schemaPath("review-output")); }
@@ -49,10 +46,10 @@ async function dispatch({ command, positional, options }) {
     const contextMode = options.context ?? "summary";
     if (!["summary", "diff", "full"].includes(contextMode)) throw new Error("--context must be summary, diff, or full");
     const maxBudget = options["max-budget-usd"] == null ? null : positiveNumber(options["max-budget-usd"], "--max-budget-usd");
-    options["max-turns"] = maxTurns; options["max-budget-usd"] = maxBudget;
+    options["max-turns"] = maxTurns; options["finalize-at-turn"] = finalizeAtTurn; options["max-budget-usd"] = maxBudget;
     const userTask = await readTaskInput(positional, options);
     if (!userTask) throw new Error("task requires a prompt, --prompt-file, or piped stdin");
-    options.disclosure = { destination: "Claude Code", context: contextMode, source: options["prompt-file"] ? "prompt-file" : positional.length ? "positional" : "stdin", bytes: Buffer.byteLength(userTask), mode: options.write ? "write-capable" : "read-only", repository_access: "enabled" };
+    options.disclosure = { destination: "Claude Code", context: contextMode, source: options["prompt-file"] ? "prompt-file" : positional.length ? "positional" : "stdin", bytes: Buffer.byteLength(userTask), mode: options.write ? "write-capable" : "read-only", repository_access: "enabled", task_profile: options["task-profile"], requested_model: options.model, effort: options.effort };
     const budgetGuidance = finalizeAtTurn ? `\n\nTurn budget: Beginning with turn ${finalizeAtTurn}, stop expanding the investigation and use the remaining turns to synthesize evidence, state uncertainty, and produce the final answer.` : "";
     const prompt = await renderPrompt("task-wrapper", { USER_TASK: `${userTask}${budgetGuidance}`, PERMISSION_MODE: options.write ? "write-capable (acceptEdits)" : "read-only (plan)" });
     return execute("task", prompt, await findWorkspaceRoot(process.cwd()), options);
@@ -98,7 +95,7 @@ async function dispatch({ command, positional, options }) {
     if (job.status === "cancelled") throw new Error(`Job ${job.id} was cancelled`);
     if (job.status === "timed_out") throw new Error(`Job ${job.id} exceeded its ${job.timeoutMs}ms wall-clock timeout`);
     if (job.status === "failed") throw jobFailureError(job);
-    return renderResult(await readClaudeJobResult(job), { ...options, "review-profile": job.reviewProfile ?? null, "max-turns": job.maxTurns ?? null, "finalize-at-turn": job.finalizeAtTurn ?? null, "max-budget-usd": job.maxBudgetUsd ?? null, "timeout-ms": job.timeoutMs ?? null });
+    return renderResult(await readClaudeJobResult(job), { ...options, "task-profile": job.taskProfile ?? null, "review-profile": job.reviewProfile ?? null, model: job.requestedModel ?? job.model ?? null, effort: job.effort ?? null, "parent-job-id": job.parentJobId ?? null, "cumulative-chain-cost-usd": job.cumulativeChainCostUsd ?? null, "max-turns": job.maxTurns ?? null, "finalize-at-turn": job.finalizeAtTurn ?? null, "max-budget-usd": job.maxBudgetUsd ?? null, "timeout-ms": job.timeoutMs ?? null });
   }
   if (command === "cancel") {
     if (positional.length > 1) throw new Error("cancel accepts at most one job id");
@@ -129,13 +126,31 @@ async function readTaskInput(positional, options) {
 }
 function positiveInteger(value, name) { const parsed = Number(value); if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} requires a positive integer`); return parsed; }
 function positiveNumber(value, name) { const parsed = Number(value); if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} requires a positive number`); return parsed; }
+function applyTaskRuntime(options, taskConfig) {
+  const profileName = options["task-profile"] ?? taskConfig.profile;
+  if (!["quick", "standard", "deep"].includes(profileName)) throw new Error("--task-profile must be quick, standard, or deep");
+  const profile = taskConfig.profiles[profileName];
+  options["task-profile"] = profileName;
+  options.model ??= taskConfig.model ?? profile.model;
+  options.effort ??= taskConfig.effort ?? profile.effort;
+  if (!["low", "medium", "high"].includes(options.effort)) throw new Error("--effort must be low, medium, or high");
+  options["max-turns"] ??= taskConfig.maxTurns ?? profile.maxTurns;
+  if (options["finalize-at-turn"] == null) {
+    const maxTurns = Number(options["max-turns"]), inheritedFinalizeAtTurn = taskConfig.finalizeAtTurn ?? profile.finalizeAtTurn;
+    options["finalize-at-turn"] = maxTurns > 1 ? Math.min(inheritedFinalizeAtTurn, maxTurns - 1) : null;
+  }
+  options["max-budget-usd"] ??= taskConfig.maxBudgetUsd ?? profile.maxBudgetUsd;
+  options["timeout-ms"] ??= taskConfig.timeoutMs ?? profile.timeoutMs;
+}
 function applyReviewRuntime(options, reviewConfig) {
   const profileName = options["review-profile"] ?? reviewConfig.profile;
   if (!["quick", "standard", "deep"].includes(profileName)) throw new Error("--review-profile must be quick, standard, or deep");
   const profile = reviewConfig.profiles[profileName];
   options["review-profile"] = profileName;
   options.base ??= reviewConfig.base;
-  options.model ??= profile.model ?? reviewConfig.model;
+  options.model ??= reviewConfig.model ?? profile.model;
+  options.effort ??= profile.effort;
+  if (!["low", "medium", "high"].includes(options.effort)) throw new Error("--effort must be low, medium, or high");
   const explicitFinalize = options["finalize-at-turn"] != null;
   options["max-turns"] = positiveInteger(options["max-turns"] ?? profile.maxTurns, "--max-turns");
   if (options["max-turns"] < 2) throw new Error("Review --max-turns must be at least 2 so the finalization phase has room to run");
@@ -173,7 +188,7 @@ function filterJobs(jobs, options) {
 function durationMs(value) { const match = /^(\d+)(m|h|d)$/.exec(String(value)); if (!match) throw new Error("--recent requires a duration such as 30m, 24h, or 7d"); return Number(match[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[match[2]]; }
 function jobFailureError(job) {
   const error = new Error(job.error || `Job ${job.id} failed`);
-  Object.assign(error, { errorKind: job.errorKind ?? null, upstreamErrorSubtype: job.upstreamErrorSubtype ?? null, suggestedAction: job.suggestedAction ?? null, exitCode: job.exitCode ?? null, signal: job.signal ?? null, sessionId: job.sessionId ?? null, usage: job.usage ?? null, modelUsage: job.modelUsage ?? null, totalCostUsd: job.totalCostUsd ?? null, numTurns: job.numTurns ?? null, durationMs: job.durationMs ?? null, durationApiMs: job.durationApiMs ?? null });
+  Object.assign(error, { errorKind: job.errorKind ?? null, upstreamErrorSubtype: job.upstreamErrorSubtype ?? null, suggestedAction: job.suggestedAction ?? null, exitCode: job.exitCode ?? null, signal: job.signal ?? null, sessionId: job.sessionId ?? null, requestedModel: job.requestedModel ?? job.model ?? null, parentJobId: job.parentJobId ?? null, cumulativeChainCostUsd: job.cumulativeChainCostUsd ?? null, usage: job.usage ?? null, modelUsage: job.modelUsage ?? null, effectiveModels: job.effectiveModels ?? null, totalCostUsd: job.totalCostUsd ?? null, numTurns: job.numTurns ?? null, durationMs: job.durationMs ?? null, durationApiMs: job.durationApiMs ?? null });
   return error;
 }
 try { const parsed = parseArgs(process.argv.slice(2)); process.stdout.write(`${await dispatch(parsed)}\n`); }

@@ -64,11 +64,28 @@ real plugin root, skills directory, and manifest path for diagnostics.
 
 ## Configuration
 
-The default task mode is read-only Claude plan mode. Use `/claude-task --write`
-only when Claude should edit the workspace. Useful task controls include
-`--model`, `--max-turns`, `--finalize-at-turn`, `--context`,
+The default task mode is the read-only `standard` profile: Sonnet, medium
+effort, 8 maximum turns, finalization from turn 6, a $1.50 soft budget, and a
+300-second timeout. Use `/claude-task --write` only when Claude should edit the
+workspace. Useful task controls include `--task-profile`, `--model`, `--effort`,
+`--max-turns`, `--finalize-at-turn`, `--context`,
 `--max-budget-usd`, `--prompt-file`, `--resume`,
 `--continue`, `--fresh`, and `--background`.
+
+Task profiles are explicit resource envelopes:
+
+| Profile | Model | Effort | Max turns | Finalize at | Soft budget | Timeout |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| `quick` | Sonnet | low | 4 | 3 | $0.50 | 120s |
+| `standard` | Sonnet | medium | 8 | 6 | $1.50 | 300s |
+| `deep` | Opus | high | 16 | 12 | $5.00 | 900s |
+
+`deep` and Opus are never selected from prompt content. Use
+`--task-profile deep` or `--model opus` explicitly. `--model fable` is passed
+through unchanged and can override any task or review profile. The plugin does
+not request Haiku and never passes `--fallback-model`; Claude CLI may still
+report internally selected auxiliary models, which remain visible through
+`effective_models` and `model_usage`.
 
 For long inputs, prefer `--prompt-file` so approval and shell displays remain
 compact. `--context summary|diff|full` declares how much context is being sent;
@@ -80,9 +97,13 @@ Environment variables:
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
-| `CLAUDE_COMPANION_MODEL` | unset | Default Claude model for tasks |
-| `CLAUDE_COMPANION_MAX_TURNS` | unset | Default task turn limit |
-| `CLAUDE_COMPANION_MAX_BUDGET_USD` | unset | Default task budget limit |
+| `CLAUDE_COMPANION_TASK_PROFILE` | `standard` | Default task profile (`quick`, `standard`, or `deep`) |
+| `CLAUDE_COMPANION_MODEL` | unset | Task model override, including `sonnet`, `opus`, or `fable` |
+| `CLAUDE_COMPANION_EFFORT` | unset | Task effort override (`low`, `medium`, or `high`) |
+| `CLAUDE_COMPANION_MAX_TURNS` | unset | Task turn-limit override |
+| `CLAUDE_COMPANION_FINALIZE_AT_TURN` | unset | Task finalization-turn override |
+| `CLAUDE_COMPANION_MAX_BUDGET_USD` | unset | Task soft-budget override |
+| `CLAUDE_COMPANION_TASK_TIMEOUT_MS` | unset | Task wall-clock timeout override |
 | `CLAUDE_COMPANION_REVIEW_BASE` | unset | Default review base ref |
 | `CLAUDE_COMPANION_REVIEW_MODEL` | unset | Default Claude model for review commands |
 | `CLAUDE_COMPANION_REVIEW_PROFILE` | `standard` | Default review budget profile (`quick`, `standard`, or `deep`) |
@@ -100,16 +121,23 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
 
 ```json
 {
-  "task": { "model": "sonnet", "maxTurns": 8, "maxBudgetUsd": 5 },
+  "task": {
+    "profile": "standard",
+    "profiles": {
+      "quick": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.5, "timeoutMs": 120000 },
+      "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 8, "finalizeAtTurn": 6, "maxBudgetUsd": 1.5, "timeoutMs": 300000 },
+      "deep": { "model": "opus", "effort": "high", "maxTurns": 16, "finalizeAtTurn": 12, "maxBudgetUsd": 5, "timeoutMs": 900000 }
+    }
+  },
   "review": {
     "base": "main",
     "model": "sonnet",
     "profile": "standard",
     "profiles": {
-      "gate": { "model": "fast-model", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.2, "timeoutMs": 90000 },
-      "quick": { "model": "fast-model", "maxTurns": 6, "finalizeAtTurn": 4, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
-      "standard": { "model": "balanced-model", "maxTurns": 12, "finalizeAtTurn": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
-      "deep": { "model": "deep-model", "maxTurns": 24, "finalizeAtTurn": 20, "maxBudgetUsd": 3, "timeoutMs": 600000 }
+      "gate": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.2, "timeoutMs": 90000 },
+      "quick": { "model": "sonnet", "effort": "low", "maxTurns": 6, "finalizeAtTurn": 4, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
+      "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 12, "finalizeAtTurn": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
+      "deep": { "model": "opus", "effort": "high", "maxTurns": 24, "finalizeAtTurn": 20, "maxBudgetUsd": 3, "timeoutMs": 600000 }
     }
   },
   "jobs": { "backgroundTimeoutMs": 3600000 }
@@ -125,11 +153,11 @@ Plugin jobs and configuration live under Codex-provided `PLUGIN_DATA` when
 available. Standalone script execution falls back to the user's Codex data
 directory. Records are workspace-scoped and written atomically.
 
-Completed results and structured budget failures expose Claude's token usage,
-per-model usage, total cost, turn count, and API/runtime duration when the
-installed Claude CLI provides those fields. JSON output also includes a
-cross-model `total_tokens` convenience value; older CLI payloads return `null`
-for unavailable metadata.
+Completed results and structured budget failures expose Claude's requested
+model, effective models, token usage, per-model usage, total cost, turn count,
+and API/runtime duration when the installed Claude CLI provides those fields.
+JSON output also includes a cross-model `total_tokens` convenience value; older
+CLI payloads return `null` for unavailable metadata.
 The bundled task, result, review, and adversarial-review skills require these
 metrics to be included in the user-facing response. Background launch output
 cannot know final usage; retrieve it with `claude-result` after completion.
@@ -146,8 +174,9 @@ text is still retained, while machine decisions consume Claude's structured
 output. User task text is wrapped as untrusted task content and is never treated
 as a plugin control instruction.
 
-Review profiles bound turns, cost, and wall-clock time without automatically
-chaining multiple models. A review must report examined and skipped files,
+Review profiles bound turns, soft budget, and wall-clock time without
+automatically chaining or falling back across models. Gate, quick, and standard
+request Sonnet; an explicitly selected deep review requests Opus. A review must report examined and skipped files,
 uncertainty, budget exhaustion, and a focused follow-up profile. Use `quick` for
 small scans, `standard` for normal reviews, and `deep` for security, concurrency,
 migrations, or core state machines. CLI budget flags override the selected
@@ -155,8 +184,9 @@ profile for one invocation.
 
 Claude's `--max-turns` limits agentic turns; the CLI's reported `num_turns`
 uses a broader usage counter and may be numerically higher. The plugin treats
-the dollar budget and wall-clock timeout as the hard execution ceilings and
-preserves both counters for auditability.
+the dollar budget as a soft target that Claude CLI can slightly exceed; only the
+wall-clock timeout is enforced by the plugin as a hard execution ceiling. Both
+turn counters and the final cost are preserved for auditability.
 
 Large reviews use a bounded manifest instead of embedding every changed path.
 Claude can request focused patches through the bundled read-only diff adapter,
@@ -207,6 +237,9 @@ Session end prunes old finished records but never terminates active work.
 Terminal phases match their status (`done`, `failed`, `cancelled`, or
 `timed_out`). Claude error subtypes such as `error_max_turns` are retained with
 a stable error kind, recovery suggestion, and resume session when available.
+Resume is always explicit. When a detached resume can be linked to a prior job,
+status and result JSON include `parent_job_id` and
+`cumulative_chain_cost_usd`; the plugin never resumes or retries automatically.
 Legacy records are normalized only while reading and labelled `legacy-partial`.
 
 ## Platform support

@@ -19,7 +19,7 @@ test("foreground task forwards a resume session before the prompt separator", as
   const fx = await fixture(), result = await run(["task", "continue work", "--resume", "source-session", "--json"], fx);
   assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).result, "resumed");
   const args = JSON.parse(await readFile(fx.invocation, "utf8")), resume = args.indexOf("--resume"), separator = args.indexOf("--");
-  assert.ok(resume > 0); assert.equal(args[resume + 1], "source-session"); assert.ok(separator > resume); assert.match(args[separator + 1], /<task>\s*continue work\s*<\/task>/);
+  assert.ok(resume > 0); assert.equal(args[resume + 1], "source-session"); assert.ok(separator > resume); assert.match(args[separator + 1], /<task>\s*continue work[\s\S]*Beginning with turn 6/);
 });
 
 test("background task persists and forwards its resume session", async () => {

@@ -22,7 +22,7 @@ async function main() {
   const cached = await readReviewGateCache();
   if (cached?.key === key && Date.now() - Date.parse(cached.cachedAt) <= CACHE_TTL_MS) return cached.verdict === "block" ? block(`Claude review found actionable issues: ${cached.summary}`) : pass();
   const rendered = await renderPrompt("stop-review-gate", { REVIEW_INPUT: `Repository: ${context.root}\nRange: ${context.range}\n${context.diff}` });
-  const result = await runClaude({ profile: "review", prompt: rendered.text, cwd: context.root, model: gate.model ?? runtime.review.model, maxTurns: gate.maxTurns, maxBudgetUsd: gate.maxBudgetUsd, timeoutMs: gate.timeoutMs, schemaPath: schemaPath("stop-gate-output") });
+  const result = await runClaude({ profile: "review", prompt: rendered.text, cwd: context.root, model: runtime.review.model ?? gate.model, effort: gate.effort, maxTurns: gate.maxTurns, maxBudgetUsd: gate.maxBudgetUsd, timeoutMs: gate.timeoutMs, schemaPath: schemaPath("stop-gate-output") });
   const verdict = result.structuredOutput;
   if (!verdict || !["allow", "block"].includes(verdict.verdict) || typeof verdict.summary !== "string") throw new Error("Claude returned an invalid review-gate verdict");
   await writeReviewGateCache({ key, verdict: verdict.verdict, summary: verdict.summary, cachedAt: new Date().toISOString() });

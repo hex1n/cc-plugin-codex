@@ -38,20 +38,31 @@ test("adversarial-review uses the read-only profile and includes focus", async (
 });
 
 test("review forwards an explicitly selected model", async () => {
-  const fx = await fixture(), result = await run(["review", "--model", "review-model", "--json"], fx);
+  const fx = await fixture(), result = await run(["review", "--model", "fable", "--json"], fx);
   assert.equal(result.code, 0, result.stderr);
   const args = JSON.parse(await readFile(fx.invocation, "utf8"));
-  assert.equal(args[args.indexOf("--model") + 1], "review-model");
+  assert.equal(args[args.indexOf("--model") + 1], "fable");
+  assert.equal(JSON.parse(result.stdout).requested_model, "fable");
 });
 
 test("review profile applies bounded runtime and finalization guidance", async () => {
   const fx = await fixture(), result = await run(["review", "--review-profile", "quick", "--json"], fx);
   assert.equal(result.code, 0, result.stderr);
   const args = JSON.parse(await readFile(fx.invocation, "utf8"));
+  assert.equal(args[args.indexOf("--model") + 1], "sonnet");
+  assert.equal(args[args.indexOf("--effort") + 1], "low");
   assert.equal(args[args.indexOf("--max-turns") + 1], "6");
   assert.equal(args[args.indexOf("--max-budget-usd") + 1], "0.3");
   assert.match(args.at(-1), /Review profile: quick/);
   assert.match(args.at(-1), /Beginning with turn 4/);
+});
+
+test("deep review explicitly selects Opus and high effort", async () => {
+  const fx = await fixture(), result = await run(["review", "--review-profile", "deep", "--json"], fx);
+  assert.equal(result.code, 0, result.stderr);
+  const args = JSON.parse(await readFile(fx.invocation, "utf8"));
+  assert.equal(args[args.indexOf("--model") + 1], "opus");
+  assert.equal(args[args.indexOf("--effort") + 1], "high");
 });
 
 test("review clamps inherited finalization when max turns is overridden", async () => {

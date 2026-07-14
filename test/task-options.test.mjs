@@ -17,7 +17,7 @@ function run(args, fx, stdin) {
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-task-options-test-")), cwd = join(root, "workspace"), capture = join(root, "args.json"), fake = join(root, "claude"); await mkdir(cwd);
-  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:"result",is_error:false,result:"done",session_id:"task-session"}));\n`); await chmod(fake, 0o755);
+  await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";const args=process.argv.slice(2),prompt=args.at(-1);writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(args));if(prompt.includes("structured error")){console.log(JSON.stringify({type:"result",subtype:"error_max_budget_usd",is_error:true,result:"budget",session_id:"task-session",total_cost_usd:0.2}));process.exit(0)}console.log(JSON.stringify({type:"result",is_error:false,result:"done",session_id:"task-session"}));\n`); await chmod(fake, 0o755);
   return { root, cwd, capture, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_ARGS: capture } };
 }
 
@@ -25,12 +25,39 @@ async function captured(fx) { return JSON.parse(await readFile(fx.capture, "utf8
 
 test("task is read-only by default and wraps the user task", async () => {
   const fx = await fixture(), result = await run(["task", "inspect only", "--json"], fx); assert.equal(result.code, 0, result.stderr);
-  const args = await captured(fx); assert.ok(args.includes("plan")); assert.ok(!args.includes("acceptEdits")); assert.match(args.at(-1), /<task>\s*inspect only\s*<\/task>/);
+  const args = await captured(fx); assert.ok(args.includes("plan")); assert.ok(!args.includes("acceptEdits")); assert.match(args.at(-1), /<task>\s*inspect only[\s\S]*Beginning with turn 6/);
+  assert.equal(args[args.indexOf("--model") + 1], "sonnet");
+  assert.equal(args[args.indexOf("--effort") + 1], "medium");
+  assert.equal(args[args.indexOf("--max-turns") + 1], "8");
+  assert.equal(args[args.indexOf("--max-budget-usd") + 1], "1.5");
+  assert.ok(!args.includes("--fallback-model"));
+  assert.equal(JSON.parse(result.stdout).task_profile, "standard");
+});
+
+test("deep task selects Opus while an explicit Fable model overrides the profile", async () => {
+  const deep = await fixture(), deepResult = await run(["task", "complex work", "--task-profile", "deep", "--json"], deep); assert.equal(deepResult.code, 0, deepResult.stderr);
+  const deepArgs = await captured(deep); assert.equal(deepArgs[deepArgs.indexOf("--model") + 1], "opus"); assert.equal(deepArgs[deepArgs.indexOf("--effort") + 1], "high"); assert.equal(JSON.parse(deepResult.stdout).task_profile, "deep");
+  const fable = await fixture(), fableResult = await run(["task", "complex work", "--task-profile", "deep", "--model", "fable", "--json"], fable); assert.equal(fableResult.code, 0, fableResult.stderr);
+  const fableArgs = await captured(fable); assert.equal(fableArgs[fableArgs.indexOf("--model") + 1], "fable"); assert.equal(fableArgs[fableArgs.indexOf("--effort") + 1], "high");
 });
 
 test("task only enables writes explicitly and forwards runtime limits", async () => {
   const fx = await fixture(), result = await run(["task", "implement it", "--write", "--model", "sonnet", "--max-turns", "4", "--max-budget-usd", "2.5", "--json"], fx); assert.equal(result.code, 0, result.stderr);
   const args = await captured(fx); assert.ok(args.includes("acceptEdits")); assert.equal(args[args.indexOf("--model") + 1], "sonnet"); assert.equal(args[args.indexOf("--max-turns") + 1], "4"); assert.equal(args[args.indexOf("--max-budget-usd") + 1], "2.5");
+});
+
+test("a foreground structured error preserves the explicitly requested model", async () => {
+  const fx = await fixture(), result = await run(["task", "structured error", "--model", "fable", "--json"], fx);
+  assert.equal(result.code, 1);
+  assert.equal(JSON.parse(result.stderr).requested_model, "fable");
+});
+
+test("a one-turn task runs without impossible finalization guidance", async () => {
+  const fx = await fixture(), result = await run(["task", "one turn", "--max-turns", "1", "--json"], fx);
+  assert.equal(result.code, 0, result.stderr);
+  const args = await captured(fx);
+  assert.equal(args[args.indexOf("--max-turns") + 1], "1");
+  assert.doesNotMatch(args.at(-1), /Beginning with turn/);
 });
 
 test("task reads prompts from a file or stdin", async () => {
@@ -43,7 +70,7 @@ test("task exposes a compact disclosure summary and finalization budget", async 
   const fx = await fixture(), result = await run(["task", "review this design", "--context", "full", "--max-turns", "6", "--finalize-at-turn", "4", "--json"], fx);
   assert.equal(result.code, 0, result.stderr);
   const output = JSON.parse(result.stdout), args = await captured(fx);
-  assert.deepEqual(output.disclosure, { destination: "Claude Code", context: "full", source: "positional", bytes: 18, mode: "read-only", repository_access: "enabled" });
+  assert.deepEqual(output.disclosure, { destination: "Claude Code", context: "full", source: "positional", bytes: 18, mode: "read-only", repository_access: "enabled", task_profile: "standard", requested_model: "sonnet", effort: "medium" });
   assert.match(args.at(-1), /Beginning with turn 4/);
 });
 

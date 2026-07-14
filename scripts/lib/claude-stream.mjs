@@ -69,7 +69,8 @@ export function progressForStreamEvent(event) {
 export function errorForStreamResult(event) {
   if (event?.type !== "result" || event.is_error !== true) return null;
   const subtype = event.subtype ?? "unknown";
-  const common = { upstreamErrorSubtype: subtype, ...(event.session_id ? { sessionId: event.session_id } : {}), ...present("usage", event.usage), ...present("modelUsage", event.modelUsage ?? event.model_usage), ...present("totalCostUsd", event.total_cost_usd ?? event.totalCostUsd), ...present("numTurns", event.num_turns ?? event.numTurns), ...present("durationMs", event.duration_ms ?? event.durationMs), ...present("durationApiMs", event.duration_api_ms ?? event.durationApiMs) };
+  const modelUsage = event.modelUsage ?? event.model_usage;
+  const common = { upstreamErrorSubtype: subtype, ...(event.session_id ? { sessionId: event.session_id } : {}), ...present("usage", event.usage), ...present("modelUsage", modelUsage), ...present("effectiveModels", modelUsage && typeof modelUsage === "object" ? Object.keys(modelUsage) : null), ...present("totalCostUsd", event.total_cost_usd ?? event.totalCostUsd), ...present("numTurns", event.num_turns ?? event.numTurns), ...present("durationMs", event.duration_ms ?? event.durationMs), ...present("durationApiMs", event.duration_api_ms ?? event.durationApiMs) };
   if (subtype === "error_max_turns") return { errorKind: "max_turns", ...common, error: "Claude reached the configured turn limit before producing a final result", suggestedAction: "resume_or_increase_turns" };
   if (subtype === "error_max_budget_usd") return { errorKind: "max_budget", ...common, error: "Claude reached the configured budget before producing a final result", suggestedAction: "increase_budget_or_reduce_scope" };
   if (subtype === "error_during_execution") return { errorKind: "claude_execution", ...common, error: "Claude reported an execution error", suggestedAction: "inspect_stderr_or_resume" };

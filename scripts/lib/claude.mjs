@@ -21,12 +21,14 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   if (!payload) throw new Error("Claude returned no valid JSON payload");
   const structuredOutput = payload.structured_output ?? null;
   const result = payload.result ?? structuredOutput ?? payload.message?.content?.map?.(part => part.text ?? "").join("") ?? payload.content;
+  const modelUsage = payload.modelUsage ?? payload.model_usage ?? null;
   const parsed = {
     text: typeof result === "string" ? result : JSON.stringify(result ?? payload),
     structuredOutput,
     sessionId: payload.session_id ?? payload.sessionId ?? null,
     usage: payload.usage ?? null,
-    modelUsage: payload.modelUsage ?? payload.model_usage ?? null,
+    modelUsage,
+    effectiveModels: modelUsage && typeof modelUsage === "object" ? Object.keys(modelUsage) : null,
     totalCostUsd: payload.total_cost_usd ?? payload.totalCostUsd ?? null,
     numTurns: payload.num_turns ?? payload.numTurns ?? null,
     durationMs: payload.duration_ms ?? payload.durationMs ?? null,
@@ -40,33 +42,38 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   }
   return parsed;
 }
-export function claudeArgs(profile, prompt, { resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath, stream = false } = {}) {
+export function claudeArgs(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false } = {}) {
   if (!CLAUDE_CLI.profiles[profile]) throw new Error(`Unknown Claude capability profile: ${profile}`);
   const profileArgs = profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile];
   const session = resume ? ["--resume", resume] : continueSession ? ["--continue"] : [];
-  const runtime = [...(model ? ["--model", model] : []), ...(maxTurns ? ["--max-turns", String(maxTurns)] : []), ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : [])];
+  const runtime = [...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : []), ...(maxTurns ? ["--max-turns", String(maxTurns)] : []), ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : [])];
   const schema = schemaPath ? ["--json-schema", schemaForClaudeCli(schemaPath)] : [];
   const baseArgs = stream ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
   return [...baseArgs, ...profileArgs, ...session, ...runtime, ...schema, "--", prompt];
 }
-export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath }) {
-  const result = await runCommand(CLAUDE_CLI.executable, claudeArgs(profile, prompt, { resume, continueSession, write, model, maxTurns, maxBudgetUsd, schemaPath }), { cwd, timeoutMs });
+export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath }) {
+  const result = await runCommand(CLAUDE_CLI.executable, claudeArgs(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath }), { cwd, timeoutMs });
   if (result.timedOut) throw new Error(`Claude timed out after ${timeoutMs}ms`);
   if (result.code !== 0) {
     try { parseClaudeJson(result.stdout); }
     catch (error) {
-      if (error instanceof ClaudeInvocationError) { error.exitCode = result.code; error.signal = result.signal ?? null; throw error; }
+      if (error instanceof ClaudeInvocationError) { error.exitCode = result.code; error.signal = result.signal ?? null; error.requestedModel = model ?? null; throw error; }
     }
-    throw new ClaudeInvocationError(result.stderr.trim() || `Claude exited with code ${result.code}`, { errorKind: "nonzero_exit", exitCode: result.code, signal: result.signal ?? null });
+    throw new ClaudeInvocationError(result.stderr.trim() || `Claude exited with code ${result.code}`, { errorKind: "nonzero_exit", exitCode: result.code, signal: result.signal ?? null, requestedModel: model ?? null });
   }
-  return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid };
+  try { return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid }; }
+  catch (error) {
+    if (error instanceof ClaudeInvocationError) error.requestedModel ??= model ?? null;
+    throw error;
+  }
 }
-export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, reviewProfile = null }) {
-  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, purpose, disclosure, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd });
+export async function startClaudeJob({ profile, prompt, cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null }) {
+  const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, effort, purpose, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd });
   let workerPid = null;
   try {
-    const timeoutMs = positiveTimeout(requestedTimeoutMs ?? backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, 3_600_000);
-    await writeJobRequest(job, { profile, prompt, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, stream: true });
+    const requested = positiveTimeout(requestedTimeoutMs, null), background = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, null);
+    const timeoutMs = requested && background ? Math.min(requested, background) : requested ?? background ?? 3_600_000;
+    await writeJobRequest(job, { profile, prompt, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, stream: true });
     const worker = fileURLToPath(new URL("../claude-job-worker.mjs", import.meta.url));
     ({ pid: workerPid } = await spawnDetachedSilent(process.execPath, [worker, cwd, job.id], { cwd, env: process.env }));
     const running = await saveJob({ ...job, pid: workerPid, workerPid, status: "running", timeoutMs, deadlineAt: new Date(Date.now() + timeoutMs).toISOString(), startedAt: new Date().toISOString() });
@@ -101,6 +108,7 @@ function claudePayloadError(payload, parsed) {
     sessionId: parsed.sessionId,
     usage: parsed.usage,
     modelUsage: parsed.modelUsage,
+    effectiveModels: parsed.effectiveModels,
     totalCostUsd: parsed.totalCostUsd,
     numTurns: parsed.numTurns,
     durationMs: parsed.durationMs,

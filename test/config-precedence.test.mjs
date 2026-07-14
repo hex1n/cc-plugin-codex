@@ -28,7 +28,11 @@ test("config precedence is project over user over environment over defaults", as
     env: { CLAUDE_COMPANION_MODEL: "env-model", CLAUDE_COMPANION_MAX_TURNS: "12", CLAUDE_COMPANION_MAX_BUDGET_USD: "7", CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS: "12000" }
   });
 
-  assert.deepEqual(config.task, { model: "project-model", maxTurns: 5, maxBudgetUsd: 3 });
+  assert.equal(config.task.model, "project-model");
+  assert.equal(config.task.maxTurns, 5);
+  assert.equal(config.task.maxBudgetUsd, 3);
+  assert.equal(config.task.profile, "standard");
+  assert.equal(config.task.profiles.standard.model, "sonnet");
   assert.equal(config.review.model, "project-review-model");
   assert.equal(config.review.profile, "standard");
   assert.equal(config.review.profiles.standard.maxTurns, 10);
@@ -50,6 +54,17 @@ test("CLI task options override project configuration", async () => {
   assert.equal(args[args.indexOf("--model") + 1], "cli-model");
   assert.equal(args[args.indexOf("--max-turns") + 1], "2");
   assert.equal(args[args.indexOf("--max-budget-usd") + 1], "2");
+});
+
+test("task profile overrides merge without losing inherited envelope fields", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-task-profile-config-")), cwd = join(root, "repo");
+  await mkdir(cwd, { recursive: true });
+  await writeJson(join(cwd, ".codex", "cc-plugin-codex.json"), { task: { profile: "quick", profiles: { quick: { model: "fable" } } } });
+  const config = await loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} });
+  assert.equal(config.task.profile, "quick");
+  assert.equal(config.task.profiles.quick.model, "fable");
+  assert.equal(config.task.profiles.quick.effort, "low");
+  assert.equal(config.task.profiles.quick.maxTurns, 4);
 });
 
 test("invalid configuration fails before Claude starts", async () => {

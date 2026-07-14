@@ -102,12 +102,12 @@ test("background review status exposes prompt contract metadata", async () => {
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
   await writeFile(fake, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"background-review"}));\n`); await chmod(fake, 0o755);
   const fx = { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state } };
-  const launched = await exec(process.execPath, [companion, "review", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
+  const launched = await exec(process.execPath, [companion, "review", "--model", "fable", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
   const id = JSON.parse(launched.stdout).job.id, deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
     const status = await exec(process.execPath, [companion, "status", id, "--json"], fx), job = JSON.parse(status.stdout).job;
     if (job.status === "completed") {
-      assert.equal(job.prompt_name, "review"); assert.match(job.prompt_hash, /^[a-f0-9]{64}$/); assert.equal(job.review_profile, "standard"); assert.equal(job.budget.max_turns, 12); assert.equal(job.budget.finalize_at_turn, 9);
+      assert.equal(job.prompt_name, "review"); assert.match(job.prompt_hash, /^[a-f0-9]{64}$/); assert.equal(job.review_profile, "standard"); assert.equal(job.requested_model, "fable"); assert.equal(job.budget.max_turns, 12); assert.equal(job.budget.finalize_at_turn, 9);
       const completed = await exec(process.execPath, [companion, "result", id, "--json"], fx), payload = JSON.parse(completed.stdout);
       assert.equal(payload.review_profile, "standard"); assert.equal(payload.budget.max_turns, 12); assert.equal(payload.budget.finalize_at_turn, 9);
       return;

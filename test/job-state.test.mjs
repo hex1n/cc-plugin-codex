@@ -21,19 +21,20 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-job-state-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude");
   await mkdir(cwd);
   await writeFile(fake, `#!/usr/bin/env node
-const raw=process.argv.at(-1),prompt=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw;
+const raw=process.argv.at(-1),wrapped=raw.match(/<task>\\s*([\\s\\S]*?)\\s*<\\/task>/)?.[1]??raw,prompt=wrapped.split("\\n\\nTurn budget:")[0];
 if(prompt==="fail"){console.error("deliberate failure");process.exit(7)}
 if(prompt==="max-turns"){console.log(JSON.stringify({type:"result",subtype:"error_max_turns",is_error:true,result:"turn limit",session_id:"resume-me"}));process.exit(1)}
 if(prompt==="max-budget"){console.log(JSON.stringify({type:"result",subtype:"error_max_budget_usd",is_error:true,result:"budget",session_id:"budget-session",total_cost_usd:0.25,num_turns:2,duration_ms:900,usage:{input_tokens:10,output_tokens:5}}));process.exit(1)}
+if(prompt==="max-budget-zero"){console.log(JSON.stringify({type:"result",subtype:"error_max_budget_usd",is_error:true,result:"budget",session_id:"budget-zero-session",total_cost_usd:0.2,num_turns:2,usage:{input_tokens:8,output_tokens:3}}));process.exit(0)}
 if(prompt==="malformed"){console.log("not-json");process.exit(0)}
-console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"persisted-session"}));
+console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"persisted-session",total_cost_usd:0.1}));
 `);
   await chmod(fake, 0o755);
   return { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS: "10000" } };
 }
 
-async function launch(fx, prompt) {
-  const result = await run(["task", prompt, "--background", "--json"], fx);
+async function launch(fx, prompt, options = []) {
+  const result = await run(["task", prompt, ...options, "--background", "--json"], fx);
   assert.equal(result.code, 0, result.stderr);
   return JSON.parse(result.stdout).job.id;
 }
@@ -87,7 +88,28 @@ test("a detached budget error preserves usage and cost", async () => {
   assert.equal(job.num_turns, 2);
   assert.equal(job.usage.output_tokens, 5);
   const result = await run(["result", id, "--json"], fx), error = JSON.parse(result.stderr);
-  assert.equal(result.code, 1); assert.equal(error.error_kind, "max_budget"); assert.equal(error.session_id, "budget-session"); assert.equal(error.total_cost_usd, 0.25); assert.equal(error.usage.output_tokens, 5);
+  assert.equal(result.code, 1); assert.equal(error.error_kind, "max_budget"); assert.equal(error.session_id, "budget-session"); assert.equal(error.requested_model, "sonnet"); assert.equal(error.total_cost_usd, 0.25); assert.equal(error.usage.output_tokens, 5);
+});
+
+test("a failed resumed job exposes its parent and cumulative chain cost in result", async () => {
+  const fx = await fixture(), parentId = await launch(fx, "success");
+  await terminalStatus(fx, parentId);
+  const id = await launch(fx, "max-budget", ["--resume", "persisted-session"]), job = await terminalStatus(fx, id);
+  assert.equal(job.parent_job_id, parentId);
+  assert.equal(job.cumulative_chain_cost_usd, 0.35);
+  const result = await run(["result", id, "--json"], fx), error = JSON.parse(result.stderr);
+  assert.equal(result.code, 1);
+  assert.equal(error.parent_job_id, parentId);
+  assert.equal(error.cumulative_chain_cost_usd, 0.35);
+});
+
+test("a structured Claude error preserves its subtype and usage even with exit zero", async () => {
+  const fx = await fixture(), id = await launch(fx, "max-budget-zero"), job = await terminalStatus(fx, id);
+  assert.equal(job.status, "failed");
+  assert.equal(job.error_kind, "max_budget");
+  assert.equal(job.session_id, "budget-zero-session");
+  assert.equal(job.total_cost_usd, 0.2);
+  assert.equal(job.usage.output_tokens, 3);
 });
 
 test("a zero exit without a valid Claude payload is failed", async () => {

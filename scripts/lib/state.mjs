@@ -8,9 +8,11 @@ function key(cwd) { return createHash("sha256").update(cwd).digest("hex").slice(
 function directoryFor(cwd) { return join(STATE_ROOT, key(cwd)); }
 function pathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.json`); }
 function requestPathFor(cwd, id) { return join(STATE_ROOT, key(cwd), `${safeId(id)}.request`); }
-export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, ownerSessionId = codexSessionId(), purpose = "user", namespace = null, disclosure = null, reviewProfile = null, maxTurns = null, finalizeAtTurn = null, maxBudgetUsd = null }) {
+export async function createJob({ cwd, profile, resumeSessionId = null, promptMeta = null, write = false, model = null, effort = null, ownerSessionId = codexSessionId(), purpose = "user", namespace = null, disclosure = null, taskProfile = null, reviewProfile = null, maxTurns = null, finalizeAtTurn = null, maxBudgetUsd = null }) {
   const id = randomUUID(), artifacts = jobArtifacts(cwd, id);
-  return saveJob({ recordVersion: 2, id, cwd, profile, purpose, namespace, disclosure, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, write: Boolean(write), model, resumeSessionId, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
+  const parent = resumeSessionId ? (await listJobs(cwd)).find(job => job.sessionId === resumeSessionId && ["completed", "failed"].includes(job.status)) : null;
+  const priorChainCostUsd = parent ? (Number.isFinite(parent.cumulativeChainCostUsd) ? parent.cumulativeChainCostUsd : Number.isFinite(parent.totalCostUsd) ? parent.totalCostUsd : null) : 0;
+  return saveJob({ recordVersion: 3, id, cwd, profile, purpose, namespace, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, write: Boolean(write), model, requestedModel: model, effectiveModels: null, effort, resumeSessionId, parentJobId: parent?.id ?? null, priorChainCostUsd, cumulativeChainCostUsd: null, ownerSessionId, pid: null, sessionId: null, status: "starting", promptName: promptMeta?.name ?? null, promptVersion: promptMeta?.version ?? null, promptHash: promptMeta?.hash ?? null, ...artifacts, createdAt: new Date().toISOString() });
 }
 export async function saveJob(record) {
   await mkdir(directoryFor(record.cwd), { recursive: true });
@@ -78,7 +80,8 @@ function safeId(id) {
 
 function normalizeJob(job) {
   const terminalPhase = { completed: "done", failed: "failed", cancelled: "cancelled", timed_out: "timed_out" }[job.status];
-  return { recordVersion: job.recordVersion ?? 1, metadataCompleteness: job.recordVersion ? "complete" : "legacy-partial", purpose: job.purpose ?? (job.cwd?.includes("cc-plugin-codex-e2e") ? "e2e" : "user"), namespace: job.namespace ?? null, ...job, phase: job.phase ?? terminalPhase ?? null };
+  const recordVersion = job.recordVersion ?? 1;
+  return { recordVersion, metadataCompleteness: recordVersion >= 3 ? "complete" : "legacy-partial", purpose: job.purpose ?? (job.cwd?.includes("cc-plugin-codex-e2e") ? "e2e" : "user"), namespace: job.namespace ?? null, ...job, requestedModel: job.requestedModel ?? job.model ?? null, effectiveModels: job.effectiveModels ?? (job.modelUsage && typeof job.modelUsage === "object" ? Object.keys(job.modelUsage) : null), phase: job.phase ?? terminalPhase ?? null };
 }
 
 async function acquireLock(path) {
