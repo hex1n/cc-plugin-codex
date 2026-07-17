@@ -1,6 +1,6 @@
 {
   "name": "cc-plugin-codex",
-  "version": "0.1.0+codex.20260714121746",
+  "version": "0.1.0+codex.20260718001845",
   "description": "Delegate typed read, review, and isolated-write tasks from Codex to Claude Code.",
   "author": {
     "name": "cc-plugin-codex contributors"
@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "Claude Code for Codex",
     "shortDescription": "Delegate work and reviews to Claude Code",
-    "longDescription": "Run typed read-only tasks, code and plan reviews, sandboxed isolated writes with explicit apply/discard, summary transfers, and detached Claude Code jobs from Codex.",
+    "longDescription": "Run typed read-only tasks, code, plan, and adversarial reviews, sandboxed isolated writes with explicit apply/discard, bounded job queries, and detached Claude Code jobs from Codex; use the restricted admin CLI only for recovery.",
     "developerName": "cc-plugin-codex contributors",
     "category": "Developer Tools",
     "capabilities": [

@@ -15,7 +15,8 @@ async function fixture({ verifiedWrite = false } = {}) {
   await writeFile(fake, `#!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 if(process.argv[2]==="--version"){console.log("2.1.208 (Claude Code)");process.exit(0)}
-let prompt="";for await(const chunk of process.stdin)prompt+=chunk;const args=process.argv.slice(2);if(args.includes("acceptEdits"))await writeFile("agent-output.txt","isolated write\\n");await writeFile(process.env.CAPTURE_INVOCATION,JSON.stringify({args,prompt,cwd:process.cwd()}));const base={type:"result",subtype:"success",is_error:false,result:"mcp-ok",session_id:"mcp-session",usage:{input_tokens:2,output_tokens:1},modelUsage:{"claude-sonnet-test":{inputTokens:2,outputTokens:1}},total_cost_usd:0.01,num_turns:1};if(prompt.includes("<plan_snapshot>"))base.structured_output={verdict:"approve",summary:"ready",findings:[],coverage:{areas_examined:["rollout"],areas_skipped:[]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}};console.log(JSON.stringify(base));
+if(process.argv[2]==="auth"){console.log(JSON.stringify({loggedIn:true,authMethod:"oauth"}));process.exit(0)}
+let prompt="";for await(const chunk of process.stdin)prompt+=chunk;const args=process.argv.slice(2);if(args.includes("acceptEdits"))await writeFile("agent-output.txt","isolated write\\n");await writeFile(process.env.CAPTURE_INVOCATION,JSON.stringify({args,prompt,cwd:process.cwd()}));const base={type:"result",subtype:"success",is_error:false,result:"mcp-ok",session_id:"mcp-session",usage:{input_tokens:2,output_tokens:1},modelUsage:{"claude-sonnet-test":{inputTokens:2,outputTokens:1}},total_cost_usd:0.01,num_turns:1};if(prompt.includes("<plan_snapshot>"))base.structured_output={verdict:"approve",summary:"ready",findings:[],coverage:{areas_examined:["rollout"],areas_skipped:[]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}};else if(prompt.includes("adversarial, read-only"))base.structured_output={verdict:"approve",summary:"resilient",findings:[],next_steps:[],coverage:{files_examined:["base.txt"],files_skipped:[],areas:["failure modes"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}};console.log(JSON.stringify(base));
 `); await chmod(fake, 0o755);
   let testServerPath = serverPath;
   if (verifiedWrite) {
@@ -25,7 +26,7 @@ let prompt="";for await(const chunk of process.stdin)prompt+=chunk;const args=pr
     manifest.entries = manifest.entries.map(entry => ({ ...entry, executableSha256 })); await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
     testServerPath = join(pluginRoot, "mcp", "server.mjs");
   }
-  return { workspace, capture, serverPath: testServerPath, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_INVOCATION: capture, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_WRITE_ROOT: join(root, "write-workspaces") } };
+  return { workspace, capture, serverPath: testServerPath, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_INVOCATION: capture, CLAUDE_COMPANION_CONFIG_ROOT: join(root, "config"), CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_WRITE_ROOT: join(root, "write-workspaces") } };
 }
 
 test("typed MCP lists tools and runs a read-only task through the shared service", async () => {
@@ -38,7 +39,8 @@ test("typed MCP lists tools and runs a read-only task through the shared service
   ]);
   assert.equal(responses.find(value => value.id === 1).result.serverInfo.name, "cc-plugin-codex");
   const names = responses.find(value => value.id === 2).result.tools.map(tool => tool.name);
-  for (const name of ["claude_review_changes", "claude_review_plan", "claude_task_readonly", "claude_write_task_start", "claude_write_task_apply", "claude_write_task_discard", "claude_job_status", "claude_job_result", "claude_job_cancel"]) assert(names.includes(name), name);
+  const expected = ["claude_review_changes", "claude_adversarial_review", "claude_review_plan", "claude_task_readonly", "claude_write_task_start", "claude_write_task_apply", "claude_write_task_discard", "claude_job_status", "claude_job_result", "claude_job_cancel", "claude_jobs_list", "claude_doctor"];
+  assert.deepEqual(names, expected);
   const called = responses.find(value => value.id === 3).result;
   assert.equal(called.structuredContent.result, "mcp-ok");
   assert.equal(called.structuredContent.requested_model, "fable");
@@ -51,12 +53,48 @@ test("typed MCP lists tools and runs a read-only task through the shared service
   assert(!invocation.args.includes("--"));
 });
 
+test("typed read-only tasks preserve explicit resume semantics", async () => {
+  const resumed = await fixture(), response = await mcp(resumed.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_task_readonly", arguments: { workspace_root: resumed.workspace, task: "continue investigation", resume_session_id: "session-123" } } }]);
+  assert.equal(response[0].error, undefined, JSON.stringify(response[0].error));
+  const invocation = JSON.parse(await readFile(resumed.capture, "utf8"));
+  assert.equal(invocation.args[invocation.args.indexOf("--resume") + 1], "session-123");
+
+  const invalid = await fixture(), rejected = await mcp(invalid.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_task_readonly", arguments: { workspace_root: invalid.workspace, task: "ambiguous", resume_session_id: "session-123", continue_session: true } } }]);
+  assert.equal(rejected[0].error.code, -32602);
+  assert.match(rejected[0].error.message, /resume.*continue|continue.*resume/i);
+  await assert.rejects(() => readFile(invalid.capture, "utf8"), error => error.code === "ENOENT");
+});
+
+test("typed doctor reports setup without invoking a model or mutating state", async () => {
+  const fx = await fixture(), responses = await mcp(fx.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_doctor", arguments: { workspace_root: fx.workspace } } }]);
+  const doctor = responses[0].result.structuredContent;
+  assert.equal(doctor.claude.installed, true);
+  assert.equal(doctor.claude.authentication_state, "authenticated");
+  assert.equal(doctor.review_gate.enabled, false);
+  assert.equal(doctor.mcp.server_readable, true);
+  await assert.rejects(() => readFile(fx.capture, "utf8"), error => error.code === "ENOENT");
+});
+
 test("typed plan review uses the review capability and reports immutable subject metadata", async () => {
   const fx = await fixture(), responses = await mcp(fx.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_review_plan", arguments: { workspace_root: fx.workspace, target_file: "docs/plan.md", model: "claude-fable-5", effort: "high" } } }]);
   const payload = responses[0].result.structuredContent;
   assert.equal(payload.review_kind, "plan"); assert.equal(payload.subject_kind, "file"); assert.equal(payload.subject_label, "docs/plan.md"); assert.match(payload.subject_fingerprint, /^[a-f0-9]{64}$/); assert.equal(payload.requested_model, "claude-fable-5");
   const invocation = JSON.parse(await readFile(fx.capture, "utf8"));
   assert(invocation.args.includes("plan")); assert(!invocation.args.includes("acceptEdits")); assert.match(invocation.prompt, /Validate the rollout/); assert.match(invocation.prompt, /Snapshot SHA-256/);
+});
+
+test("typed adversarial review is a dedicated read-only MCP capability", async () => {
+  const fx = await fixture();
+  await writeFile(join(fx.workspace, "base.txt"), "changed\n");
+  const responses = await mcp(fx.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_adversarial_review", arguments: { workspace_root: fx.workspace, focus: "crash recovery", model: "fable", effort: "high" } } }]);
+  const payload = responses[0].result.structuredContent;
+  assert.equal(payload.review_kind, "adversarial");
+  assert.equal(payload.subject_kind, "changes");
+  assert.equal(payload.requested_model, "fable");
+  const invocation = JSON.parse(await readFile(fx.capture, "utf8"));
+  assert(invocation.args.includes("plan"));
+  assert(!invocation.args.includes("acceptEdits"));
+  assert.match(invocation.prompt, /User focus: crash recovery/);
 });
 
 test("background plan review persists subject metadata without plan content", async () => {
@@ -114,16 +152,28 @@ test("MCP rejects unknown fields before invoking Claude", async () => {
   await assert.rejects(() => readFile(fx.capture, "utf8"), value => value.code === "ENOENT");
 });
 
+test("MCP rejects oversized adversarial focus before invoking Claude", async () => {
+  const fx = await fixture(), responses = await mcp(fx.env, [{ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "claude_adversarial_review", arguments: { workspace_root: fx.workspace, focus: "x".repeat(2001) } } }]);
+  assert.equal(responses[0].error.code, -32602);
+  assert.match(responses[0].error.message, /focus.*maximum|focus.*2000/i);
+  await assert.rejects(() => readFile(fx.capture, "utf8"), error => error.code === "ENOENT");
+});
+
 test("plugin manifest exposes the local MCP server", async () => {
   const manifest = JSON.parse(await readFile(resolve(".codex-plugin/plugin.json"), "utf8")), mcpConfig = JSON.parse(await readFile(resolve(".mcp.json"), "utf8"));
   assert.equal(manifest.mcpServers, "./.mcp.json");
   assert.deepEqual(mcpConfig.mcpServers["cc-plugin-codex"], { command: "node", args: ["./mcp/server.mjs"], cwd: "." });
 });
 
-test("CLI and MCP are thin adapters over a transport-neutral service", async () => {
-  const service = await readFile(resolve("scripts/lib/service.mjs"), "utf8"), cli = await readFile(resolve("scripts/claude-companion.mjs"), "utf8"), server = await readFile(serverPath, "utf8");
+test("admin and MCP adapters keep transport-neutral service boundaries", async () => {
+  const service = await readFile(resolve("scripts/lib/service.mjs"), "utf8"), admin = await readFile(resolve("scripts/claude-admin.mjs"), "utf8"), server = await readFile(serverPath, "utf8"), pkg = JSON.parse(await readFile(resolve("package.json"), "utf8"));
   assert.doesNotMatch(service, /process\.argv|readline|\.\/render\.mjs|mcp\/server/);
-  assert.match(cli, /from "\.\/lib\/service\.mjs"/); assert.match(server, /from "\.\.\/scripts\/lib\/service\.mjs"/); assert.doesNotMatch(server, /claude-companion|spawn\(/);
+  assert.match(admin, /from "#app\/admin-service"/);
+  assert.equal(pkg.imports["#app/*"], "./scripts/lib/*.mjs");
+  assert.deepEqual(pkg.bin, { "claude-companion-admin": "scripts/claude-admin.mjs" });
+  assert.match(server, /from "#app\/service"/);
+  assert.doesNotMatch(server, /\.\.\/scripts\/lib\//);
+  assert.doesNotMatch(server, /claude-companion|spawn\(/);
 });
 
 function mcp(env, messages, executable = serverPath) {

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { join } from "node:path";
 import test from "node:test";
 import { requireSuccessfulTermination } from "../scripts/lib/process.mjs";
+import { callMcp, callMcpRaw } from "./helpers/mcp-client.js";
 
 test("nonzero platform termination results are rejected", () => {
   assert.throws(() => requireSuccessfulTermination({ code: 1, stderr: "access denied" }, "taskkill"), /access denied/);
@@ -12,8 +12,6 @@ test("nonzero platform termination results are rejected", () => {
 });
 import { runCommand } from "../scripts/lib/process.mjs";
 
-const companion = resolve("scripts/claude-companion.mjs");
-function run(args, { cwd, env }) { return new Promise((resolveRun, reject) => { const child = spawn(process.execPath, [companion, ...args], { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] }); let stdout = "", stderr = ""; child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8"); child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; }); child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr })); }); }
 async function fixture(timeoutMs) {
   const root = await mkdtemp(join(tmpdir(), "claude-timeout-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude"), childPid = join(root, "child.pid");
   await mkdir(cwd);
@@ -25,22 +23,22 @@ async function jobRecord(fx, id) { const [workspace] = await readdir(fx.state); 
 async function pollRecord(fx, id, expected, timeout = 12_000) { const deadline = Date.now() + timeout; while (Date.now() < deadline) { const record = await jobRecord(fx, id); if (record.value.status === expected) return record.value; await new Promise(resolveWait => setTimeout(resolveWait, 40)); } throw new Error(`Timed out waiting for ${expected}`); }
 
 test("monitor records natural completion without a status poll", async () => {
-  const fx = await fixture(10_000), launched = await run(["task", "quick", "--background", "--json"], fx), id = JSON.parse(launched.stdout).job.id;
+  const fx = await fixture(10_000), launched = await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: "quick", background: true }), id = launched.id;
   const record = await pollRecord(fx, id, "completed");
   assert.equal(record.timeoutMs, 10_000); assert.ok(record.deadlineAt); assert.equal(record.status, "completed");
-  const result = await run(["result", id, "--json"], fx); assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).result, "quick");
+  const result = await callMcp(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id }); assert.equal(result.result, "quick");
 });
 
 test("monitor terminates and marks an overdue process", async () => {
-  const fx = await fixture(200), launched = await run(["task", "sleep", "--background", "--json"], fx), job = JSON.parse(launched.stdout).job;
+  const fx = await fixture(200), job = await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: "sleep", background: true });
   const record = await pollRecord(fx, job.id, "timed_out");
   assert.equal(record.status, "timed_out"); assert.equal(record.timeoutMs, 200);
   assert.throws(() => process.kill(job.pid, 0), error => error.code === "ESRCH");
-  const result = await run(["result", job.id, "--json"], fx); assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /wall-clock timeout/);
+  const result = await callMcpRaw(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: job.id }); assert.equal(result.error.code, -32603); assert.match(result.error.message, /wall-clock timeout/);
 });
 
 test("timeout escalates when a Claude child ignores SIGTERM", async () => {
-  const fx = await fixture(1_000), launched = await run(["task", "ignore-term", "--background", "--json"], fx), job = JSON.parse(launched.stdout).job;
+  const fx = await fixture(5_000), job = await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: "ignore-term", background: true });
   const childPid = Number(await waitForFile(fx.childPid));
   const record = await pollRecord(fx, job.id, "timed_out");
   assert.equal(record.errorKind, "timeout");
@@ -54,9 +52,9 @@ test("foreground timeout also escalates past ignored SIGTERM", async () => {
   assert.ok(Date.now() - started < 1_500, `foreground timeout took ${Date.now() - started}ms`);
 });
 
-test("task --timeout-ms reaches the foreground Claude process", async () => {
-  const fx = await fixture(10_000), started = Date.now(), result = await run(["task", "ignore-term", "--timeout-ms", "100", "--json"], fx);
-  assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /timed out/i);
+test("MCP timeout_ms reaches the foreground Claude process", async () => {
+  const fx = await fixture(10_000), started = Date.now(), result = await callMcpRaw(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: "ignore-term", timeout_ms: 100 });
+  assert.equal(result.error.code, -32603); assert.match(result.error.message, /timed out/i);
   assert.ok(Date.now() - started < 1_500, `CLI timeout took ${Date.now() - started}ms`);
 });
 

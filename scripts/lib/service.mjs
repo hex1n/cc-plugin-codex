@@ -16,6 +16,9 @@ import { applyWriteArtifact, discardWriteArtifact } from "./patch-artifact.mjs";
 const ACTIVE = new Set(["starting", "running", "queued"]);
 
 export async function runReadonlyTask(request) {
+  if ((request.resumeSessionId ?? request.resume) && request.continueSession) {
+    throw Object.assign(new Error("Choose only one of resume_session_id or continue_session"), { rpcCode: -32602 });
+  }
   const workspace = await findWorkspaceRoot(request.workspaceRoot), options = taskOptions(request), runtimeConfig = await loadRuntimeConfig({ cwd: workspace });
   applyTaskRuntime(options, runtimeConfig.task);
   const budgetGuidance = normalizeTaskBudget(options);
@@ -31,6 +34,15 @@ export async function reviewChanges(request) {
   const context = await collectReviewContext({ cwd: workspace, base: options.base });
   const rendered = await renderPrompt("review", { TARGET_LABEL: context.range, REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${context.root}\n${context.diff}` });
   const metadata = { operation: "review", reviewKind: "code", subjectKind: "changes", subjectLabel: context.range, subjectFingerprint: context.fingerprint, transport: request.transport ?? null, capability: "read-only" };
+  return executeOperation({ profile: "review", renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata });
+}
+
+export async function reviewChangesAdversarial(request) {
+  const workspace = await findWorkspaceRoot(request.workspaceRoot), options = reviewOptions(request), runtimeConfig = await loadRuntimeConfig({ cwd: workspace });
+  applyReviewRuntime(options, runtimeConfig.review);
+  const context = await collectReviewContext({ cwd: workspace, base: options.base });
+  const rendered = await renderPrompt("adversarial-review", { TARGET_LABEL: context.range, USER_FOCUS: request.focus?.trim() || "none", REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${context.root}\n${context.diff}` });
+  const metadata = { operation: "review", reviewKind: "adversarial", subjectKind: "changes", subjectLabel: context.range, subjectFingerprint: context.fingerprint, transport: request.transport ?? null, capability: "read-only" };
   return executeOperation({ profile: "review", renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata });
 }
 
@@ -147,7 +159,7 @@ export function applyReviewRuntime(options, reviewConfig, { applyBase = true } =
   options["max-budget-usd"] = positiveNumber(options["max-budget-usd"] ?? profile.maxBudgetUsd, "max_budget_usd"); options["timeout-ms"] = positiveNumber(options["timeout-ms"] ?? profile.timeoutMs, "timeout_ms");
 }
 
-function taskOptions(request) { return { json: true, background: Boolean(request.background), write: false, resume: request.resume ?? null, continue: Boolean(request.continueSession), model: request.model ?? null, effort: request.effort ?? null, "task-profile": request.taskProfile ?? null, "max-turns": request.maxTurns ?? null, "finalize-at-turn": request.finalizeAtTurn ?? null, "max-budget-usd": request.maxBudgetUsd ?? null, "timeout-ms": request.timeoutMs ?? null, backgroundTimeoutMs: request.backgroundTimeoutMs, purpose: request.purpose ?? "user" }; }
+function taskOptions(request) { return { json: true, background: Boolean(request.background), write: false, resume: request.resumeSessionId ?? request.resume ?? null, continue: Boolean(request.continueSession), model: request.model ?? null, effort: request.effort ?? null, "task-profile": request.taskProfile ?? null, "max-turns": request.maxTurns ?? null, "finalize-at-turn": request.finalizeAtTurn ?? null, "max-budget-usd": request.maxBudgetUsd ?? null, "timeout-ms": request.timeoutMs ?? null, backgroundTimeoutMs: request.backgroundTimeoutMs, purpose: request.purpose ?? "user" }; }
 function reviewOptions(request) { return { json: true, background: Boolean(request.background), model: request.model ?? null, effort: request.effort ?? null, base: request.base ?? null, "review-profile": request.reviewProfile ?? null, "max-turns": request.maxTurns ?? null, "finalize-at-turn": request.finalizeAtTurn ?? null, "max-budget-usd": request.maxBudgetUsd ?? null, "timeout-ms": request.timeoutMs ?? null, purpose: "user" }; }
 function reviewBudgetGuidance(options) { return `Review profile: ${options["review-profile"]}. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. Beginning with turn ${options["finalize-at-turn"]}, stop expanding the investigation. Use remaining turns to verify findings, enumerate examined and skipped files, state uncertainty and budget exhaustion, and recommend only a focused deeper follow-up when warranted.`; }
 function reviewCollectionGuidance(context) { return context.inline ? "Inspect the supplied diff. Use repository tools only for focused caller or invariant tracing." : `Use the bounded read-only adapter for patch content: node ${JSON.stringify(REVIEW_DIFF_ADAPTER)} --base ${JSON.stringify(context.adapterBase)} --file <repo-relative-path> [--file <path> ...] --max-bytes 65536. Use at most five files per call. The process already runs at the repository root. Run exactly one command per Bash tool call; do not use git -C, pipes, redirects, command separators, echo, tail, or shell composition. Use Read, Grep, or Glob for focused follow-up.`; }

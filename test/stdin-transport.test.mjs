@@ -4,18 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-
-const companion = resolve("scripts/claude-companion.mjs");
-
-function run(args, fx) {
-  return new Promise((resolveRun, reject) => {
-    const child = spawn(process.execPath, [companion, ...args], { cwd: fx.cwd, env: fx.env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
-    child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr }));
-  });
-}
+import { callMcp } from "./helpers/mcp-client.js";
 
 async function poll(fn, predicate, timeoutMs = 4_000) {
   const deadline = Date.now() + timeoutMs;
@@ -47,8 +36,8 @@ process.stdout.write(JSON.stringify(result) + "\\n");
 
 test("foreground Claude receives the rendered prompt only through stdin", async () => {
   const fx = await fixture("foreground"), marker = "literal --model fable\n第二行";
-  const result = await run(["task", marker, "--model", "sonnet", "--effort", "high", "--json"], fx);
-  assert.equal(result.code, 0, result.stderr);
+  const result = await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: marker, model: "sonnet", effort: "high" });
+  assert.equal(result.result, "stdin-ok");
   const invocation = JSON.parse(await readFile(fx.capture, "utf8"));
   assert.match(invocation.prompt, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert(!invocation.args.includes("--"));
@@ -59,15 +48,14 @@ test("foreground Claude receives the rendered prompt only through stdin", async 
 
 test("background stream-json Claude receives the rendered prompt only through stdin", async () => {
   const fx = await fixture("background"), marker = "background stdin marker";
-  const launched = await run(["task", marker, "--background", "--json"], fx);
-  assert.equal(launched.code, 0, launched.stderr);
-  const id = JSON.parse(launched.stdout).job.id;
-  await poll(() => run(["status", id, "--json"], fx), value => JSON.parse(value.stdout).job.status === "completed");
+  const launched = await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: marker, background: true });
+  const id = launched.id;
+  await poll(() => callMcp(fx.env, "claude_job_status", { workspace_root: fx.cwd, job_id: id }), value => value.status === "completed");
   const invocation = JSON.parse(await readFile(fx.capture, "utf8"));
   assert.match(invocation.prompt, new RegExp(marker));
   assert(invocation.args.includes("stream-json"));
   assert(!invocation.args.includes("--"));
   assert(invocation.args.every(value => !value.includes(marker)));
-  const result = JSON.parse((await run(["result", id, "--json"], fx)).stdout);
+  const result = await callMcp(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id });
   assert.equal(result.result, "stdin-ok");
 });

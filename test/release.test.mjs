@@ -9,6 +9,8 @@ function run(command, args) { return new Promise((resolveRun, reject) => { const
 test("package and plugin versions share one release base", async () => {
   const pkg = JSON.parse(await readFile("package.json", "utf8")), plugin = JSON.parse(await readFile(".codex-plugin/plugin.json", "utf8"));
   assert.equal(plugin.version.split("+")[0], pkg.version); assert.equal(pkg.license, "Apache-2.0"); assert.equal(pkg.scripts.check, "node scripts/check.mjs");
+  assert.deepEqual(pkg.bin, { "claude-companion-admin": "scripts/claude-admin.mjs" });
+  assert.equal(pkg.imports["#app/*"], "./scripts/lib/*.mjs");
   const check = await run(process.execPath, ["scripts/check.mjs", "--syntax-only"]); assert.equal(check.code, 0, check.stderr);
 });
 

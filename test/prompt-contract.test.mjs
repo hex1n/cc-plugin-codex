@@ -7,6 +7,7 @@ import test from "node:test";
 import { parseClaudeJson } from "../scripts/lib/claude.mjs";
 import { renderError, renderResult } from "../scripts/lib/render.mjs";
 import { renderPrompt } from "../scripts/lib/prompts.mjs";
+import { callMcp, callMcpRaw } from "./helpers/mcp-client.js";
 
 test("Claude usage metadata survives parsing and result rendering", () => {
   const parsed = parseClaudeJson(JSON.stringify({ type: "result", result: "ok", session_id: "usage-session", usage: { input_tokens: 2, cache_creation_input_tokens: 3, cache_read_input_tokens: 5, output_tokens: 7 }, modelUsage: { opus: { inputTokens: 2, cacheCreationInputTokens: 3, cacheReadInputTokens: 5, outputTokens: 7 }, haiku: { inputTokens: 11, outputTokens: 13 } }, total_cost_usd: 1.25, num_turns: 4, duration_ms: 100, duration_api_ms: 90 }));
@@ -68,8 +69,6 @@ test("plan review prompt and schema enforce categorized, located findings", asyn
   assert.throws(() => parseClaudeJson(JSON.stringify({ type: "result", is_error: false, structured_output: tooMany }), { schemaPath: schema }), /maximum item count/);
 });
 
-const companion = resolve("scripts/claude-companion.mjs");
-
 function exec(command, args, { cwd, env = process.env } = {}) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(command, args, { cwd, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
@@ -93,11 +92,10 @@ test("review passes a JSON Schema and returns structured output", async () => {
   await mkdir(cwd); await exec("git", ["init", "--quiet"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
   await writeFile(fake, `#!/usr/bin/env node\nimport {writeFileSync} from "node:fs";writeFileSync(process.env.CAPTURE_ARGS,JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"structured-session"}));\n`); await chmod(fake, 0o755);
-  const result = await exec(process.execPath, [companion, "review", "--json"], { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_ARGS: capture } });
-  assert.equal(result.code, 0, result.stderr);
+  const result = await callMcp({ ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CAPTURE_ARGS: capture }, "claude_review_changes", { workspace_root: cwd });
   const args = JSON.parse(await readFile(capture, "utf8")), schemaIndex = args.indexOf("--json-schema");
   assert.ok(schemaIndex > 0); const schema = JSON.parse(args[schemaIndex + 1]); assert.deepEqual(schema.required, ["verdict", "summary", "findings", "next_steps", "coverage", "uncertainty", "budget_exhausted", "recommended_followup"]); assert.equal("$schema" in schema, false);
-  const payload = JSON.parse(result.stdout); assert.equal(payload.structured_output.verdict, "approve"); assert.equal(payload.session_id, "structured-session");
+  assert.equal(result.structured_output.verdict, "approve"); assert.equal(result.session_id, "structured-session");
 });
 
 test("review rejects structured output that violates its schema", async () => {
@@ -105,8 +103,8 @@ test("review rejects structured output that violates its schema", async () => {
   await mkdir(cwd); await exec("git", ["init", "--quiet"], { cwd }); await exec("git", ["config", "user.email", "test@example.com"], { cwd }); await exec("git", ["config", "user.name", "Test"], { cwd });
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
   await writeFile(fake, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve"},session_id:"invalid-schema"}));\n`); await chmod(fake, 0o755);
-  const result = await exec(process.execPath, [companion, "review", "--json"], { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake } });
-  assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /required/);
+  const result = await callMcpRaw({ ...process.env, CLAUDE_CODE_EXECUTABLE: fake }, "claude_review_changes", { workspace_root: cwd });
+  assert.equal(result.error.code, -32603); assert.match(result.error.message, /required/);
 });
 
 test("background review status exposes prompt contract metadata", async () => {
@@ -115,13 +113,13 @@ test("background review status exposes prompt contract metadata", async () => {
   await writeFile(join(cwd, "base.txt"), "base\n"); await exec("git", ["add", "base.txt"], { cwd }); await exec("git", ["commit", "--quiet", "-m", "base"], { cwd }); await writeFile(join(cwd, "base.txt"), "changed\n");
   await writeFile(fake, `#!/usr/bin/env node\nconsole.log(JSON.stringify({type:"result",is_error:false,result:"",structured_output:{verdict:"approve",summary:"No findings",findings:[],next_steps:[],coverage:{files_examined:["a"],files_skipped:[],areas:["diff"]},uncertainty:"low",budget_exhausted:false,recommended_followup:{profile:"none",focus:[],reason:""}},session_id:"background-review"}));\n`); await chmod(fake, 0o755);
   const fx = { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state } };
-  const launched = await exec(process.execPath, [companion, "review", "--model", "fable", "--background", "--json"], fx); assert.equal(launched.code, 0, launched.stderr);
-  const id = JSON.parse(launched.stdout).job.id, deadline = Date.now() + 12_000;
+  const launched = await callMcp(fx.env, "claude_review_changes", { workspace_root: cwd, model: "fable", background: true });
+  const id = launched.id, deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
-    const status = await exec(process.execPath, [companion, "status", id, "--json"], fx), job = JSON.parse(status.stdout).job;
+    const job = await callMcp(fx.env, "claude_job_status", { workspace_root: cwd, job_id: id });
     if (job.status === "completed") {
       assert.equal(job.prompt_name, "review"); assert.match(job.prompt_hash, /^[a-f0-9]{64}$/); assert.equal(job.review_profile, "standard"); assert.equal(job.requested_model, "fable"); assert.equal(job.budget.max_turns, 12); assert.equal(job.budget.finalize_at_turn, 9);
-      const completed = await exec(process.execPath, [companion, "result", id, "--json"], fx), payload = JSON.parse(completed.stdout);
+      const payload = await callMcp(fx.env, "claude_job_result", { workspace_root: cwd, job_id: id });
       assert.equal(payload.review_profile, "standard"); assert.equal(payload.budget.max_turns, 12); assert.equal(payload.budget.finalize_at_turn, 9);
       return;
     }

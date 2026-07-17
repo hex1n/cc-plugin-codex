@@ -5,8 +5,8 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 import { boundedReviewManifest, collectReviewContext } from "../scripts/lib/git.mjs";
+import { callMcp } from "./helpers/mcp-client.js";
 
-const companion = resolve("scripts/claude-companion.mjs");
 const adapter = resolve("scripts/review-diff.mjs");
 
 function exec(command, args, { cwd, env = process.env } = {}) {
@@ -28,8 +28,7 @@ async function fixture() {
 }
 
 async function reviewPrompt(fx) {
-  const result = await exec(process.execPath, [companion, "review", "--json"], fx);
-  assert.equal(result.code, 0, result.stderr);
+  await callMcp(fx.env, "claude_review_changes", { workspace_root: fx.cwd });
   return readFile(fx.capture, "utf8");
 }
 

@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
 
-const companion = resolve("scripts/claude-companion.mjs"), hook = resolve("hooks/review-gate.mjs");
+const admin = resolve("scripts/claude-admin.mjs"), hook = resolve("hooks/review-gate.mjs");
 function runNode(script, args, { cwd, env, stdin }) { return new Promise((resolveRun, reject) => { const child = spawn(process.execPath, [script, ...args], { cwd, env, shell: false, stdio: ["pipe", "pipe", "pipe"] }); let stdout = "", stderr = ""; child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8"); child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; }); child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr })); child.stdin.end(stdin ?? ""); }); }
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "review-gate-test-")), bin = join(root, "bin"), cwd = join(root, "workspace"), config = join(root, "config"), called = join(root, "claude-called"), fakeClaude = join(bin, "claude"), fakeGit = join(bin, "git");
@@ -16,14 +16,14 @@ async function fixture() {
   return { cwd, called, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CLAUDE_CODE_EXECUTABLE: fakeClaude, CLAUDE_COMPANION_CONFIG_ROOT: config, FAKE_CALLED: called, FAKE_WORKSPACE: cwd, FAKE_VERDICT: JSON.stringify({ verdict: "allow", summary: "No issues" }) } };
 }
 const stopInput = (fx, extra = {}) => JSON.stringify({ hook_event_name: "Stop", cwd: fx.cwd, stop_hook_active: false, ...extra });
-async function setGate(fx, enabled) { const flag = enabled ? "--enable-review-gate" : "--disable-review-gate"; return runNode(companion, ["setup", flag, "--json"], fx); }
+async function setGate(fx, enabled) { return runNode(admin, ["review-gate", enabled ? "enable" : "disable", "--json"], fx); }
 async function runHook(fx, extra = {}) { const result = await runNode(hook, [], { ...fx, stdin: stopInput(fx, extra) }); assert.equal(result.code, 0, result.stderr); return JSON.parse(result.stdout); }
 async function wasCalled(path) { try { await access(path); return true; } catch { return false; } }
 
-test("setup explicitly enables and disables the review gate", async () => {
+test("admin explicitly enables and disables the review gate", async () => {
   const fx = await fixture();
-  assert.equal(JSON.parse((await setGate(fx, true)).stdout).setup.reviewGateEnabled, true);
-  assert.equal(JSON.parse((await setGate(fx, false)).stdout).setup.reviewGateEnabled, false);
+  assert.equal(JSON.parse((await setGate(fx, true)).stdout).review_gate.enabled, true);
+  assert.equal(JSON.parse((await setGate(fx, false)).stdout).review_gate.enabled, false);
 });
 
 test("disabled and recursive Stop hooks pass without invoking Claude", async () => {

@@ -43,6 +43,6 @@ for (const file of files) {
 }
 
 if (!process.argv.includes("--syntax-only")) {
-  const code = await run(["--test", ...files.filter(file => file.startsWith("test/"))]);
+  const code = await run(["--test", ...files.filter(file => file.startsWith("test/") && !file.startsWith("test/verify-"))]);
   if (code !== 0) process.exit(code);
 }

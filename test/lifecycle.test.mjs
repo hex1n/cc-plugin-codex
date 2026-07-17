@@ -7,12 +7,13 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import { reconcileJob } from "../scripts/lib/job-lifecycle.mjs";
 
-const hook = resolve("hooks/session-end.mjs"), companion = resolve("scripts/claude-companion.mjs");
+const hook = resolve("hooks/session-end.mjs"), admin = resolve("scripts/claude-admin.mjs");
 function run(script, args, fx, stdin) { return new Promise((resolveRun, reject) => { const child = spawn(process.execPath, [script, ...args], { cwd: fx.cwd, env: fx.env, shell: false, stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] }); let stdout = "", stderr = ""; child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8"); child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; }); child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr })); if (stdin !== undefined) child.stdin.end(stdin); }); }
 async function exists(path) { try { await access(path); return true; } catch { return false; } }
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-lifecycle-test-")), workspace = join(root, "workspace"), state = join(root, "state"); await mkdir(workspace); const cwd = await realpath(workspace), directory = join(state, createHash("sha256").update(cwd).digest("hex").slice(0, 16)); await mkdir(directory, { recursive: true });
+  await new Promise((resolveInit, reject) => { const child = spawn("git", ["init", "--quiet"], { cwd, shell: false }); child.once("error", reject); child.once("close", code => code === 0 ? resolveInit() : reject(new Error(`git init exited ${code}`))); });
   const oldStdout = join(directory, "old.stdout.log"), oldStderr = join(directory, "old.stderr.log"), old = { id: "old", cwd, profile: "task", status: "completed", pid: 99999999, stdoutPath: oldStdout, stderrPath: oldStderr, createdAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:01:00.000Z" };
   const active = { id: "active", cwd, profile: "task", status: "running", pid: process.pid, stdoutPath: join(directory, "active.stdout.log"), stderrPath: join(directory, "active.stderr.log"), createdAt: new Date().toISOString() };
   const recoveryRoot = join(root, "recovery-workspace"), recovery = { id: "recovery", cwd, profile: "task", status: "completed", phase: "recovery_required", write: true, artifactStatus: "partial_apply", recoveryRequired: true, cleanupPending: false, isolatedRoot: recoveryRoot, createdAt: "2020-01-01T00:00:00.000Z", finishedAt: "2020-01-01T00:01:00.000Z" };
@@ -30,8 +31,8 @@ test("SessionEnd prunes expired terminal artifacts but preserves active and corr
 });
 
 test("workspace status isolates a corrupt job record instead of failing", async () => {
-  const fx = await fixture(), output = await run(companion, ["status", "--all", "--json"], fx);
-  assert.equal(output.code, 0, output.stderr); const jobs = JSON.parse(output.stdout).jobs, broken = jobs.find(job => job.id === "broken"); assert.equal(broken.status, "corrupt"); assert.match(broken.error, /JSON|parse|Unexpected/i);
+  const fx = await fixture(), output = await run(admin, ["jobs", "list", "--workspace", fx.cwd, "--include-test", "--json"], fx);
+  assert.equal(output.code, 0, output.stderr); const jobs = JSON.parse(output.stdout).jobs, broken = jobs.find(job => job.id === "broken"); assert.equal(broken.status, "corrupt"); assert.equal(broken.error_kind, "corrupt_job_record");
   assert.match(await readFile(join(fx.directory, "broken.json"), "utf8"), /not json/);
 });
 
@@ -41,11 +42,11 @@ test("global status discovers other workspaces and hides E2E jobs by default", a
   const createdAt = new Date().toISOString();
   await writeFile(join(otherDirectory, "user-job.json"), JSON.stringify({ id: "user-job", cwd: other, profile: "task", status: "completed", phase: "done", purpose: "user", createdAt, finishedAt: createdAt }));
   await writeFile(join(otherDirectory, "e2e-job.json"), JSON.stringify({ id: "e2e-job", cwd: other, profile: "task", status: "completed", phase: "done", purpose: "e2e", namespace: "cc-plugin-codex-e2e", createdAt, finishedAt: createdAt }));
-  const output = await run(companion, ["status", "--global", "--recent", "24h", "--json"], fx);
+  const output = await run(admin, ["jobs", "list", "--workspace", fx.cwd, "--global", "--updated-after", new Date(Date.now() - 86_400_000).toISOString(), "--json"], fx);
   assert.equal(output.code, 0, output.stderr);
   assert.deepEqual(new Set(JSON.parse(output.stdout).jobs.map(job => job.id)), new Set(["user-job", "active"]));
   assert.equal(JSON.parse(output.stdout).jobs.some(job => job.id === "e2e-job"), false);
-  const withTests = await run(companion, ["status", "--global", "--include-test", "--json"], fx);
+  const withTests = await run(admin, ["jobs", "list", "--workspace", fx.cwd, "--global", "--include-test", "--json"], fx);
   assert.deepEqual(new Set(JSON.parse(withTests.stdout).jobs.map(job => job.id)), new Set(["user-job", "e2e-job", "active", "recovery", "old", "broken"]));
 });
 

@@ -16,12 +16,18 @@ task, transfer, status, result, and cancel.
 
 ## Typed MCP tools
 
-The primary Codex integration is the local stdio MCP server declared by
-`.mcp.json`. It exposes separate tools for read-only tasks, code review, plan
-review, isolated write start, explicit apply/discard, and job lifecycle. The
-server imports the same application service as the compatibility CLI; it does
-not spawn a shell or the CLI adapter. Prompts are sent to Claude over stdin and
-never appear in its argv.
+The only normal Codex integration is the local stdio MCP server declared by
+`.mcp.json`. Its twelve typed tools cover read-only tasks, code/plan/adversarial
+review, isolated write start, explicit apply/discard, explicit-ID job lifecycle,
+bounded job listing, and read-only setup diagnosis. The server imports stable
+`#app/*` application contracts; it does not spawn a shell or a CLI adapter.
+Prompts are sent to Claude over stdin and never appear in its argv.
+
+Skills provide discovery, routing, client-side polling, and result presentation.
+They do not fall back to another transport when MCP is unavailable. Although
+the MCP protocol defines prompts and resources, the currently verified Codex
+product surface does not expose server prompts; MCP prompts are therefore not a
+workflow or security dependency.
 
 Plan review accepts one UTF-8 repository file (maximum 256 KiB) and records only
 its label and SHA-256 fingerprint. Use `fable` or `claude-fable-5` explicitly;
@@ -49,12 +55,16 @@ Restart Codex after installation so skills and hooks are reloaded. Run
 plugin storage, and the optional review-gate configuration. Setup is diagnostic
 only; it never installs software or logs in on your behalf.
 
-For source development, run commands directly from this repository:
+For source development or MCP-down recovery, use the restricted admin entry:
 
 ```sh
-node scripts/claude-companion.mjs setup
-node scripts/claude-companion.mjs review
+node scripts/claude-admin.mjs doctor
+node scripts/claude-admin.mjs mcp probe
 ```
+
+The legacy normal `claude-companion` CLI has been removed after the migration
+gate passed. Normal operations are available only through Skills and typed MCP;
+the admin entry cannot start review/task or apply artifacts.
 
 ## Updating
 
@@ -69,23 +79,20 @@ The build metadata suffix in `.codex-plugin/plugin.json` is intentionally
 updated for local cache busting while the public release base remains aligned
 with `package.json`.
 
-Skill instructions refer to `<PLUGIN_ROOT>` as an agent-resolved placeholder
-for the installed plugin directory. It is not a shell environment variable;
-this keeps commands independent of both the target repository and the plugin
-cache's versioned directory layout. `/claude-setup` reports the corresponding
-real plugin root, skills directory, and manifest path for diagnostics.
+Skill instructions use `<PLUGIN_ROOT>` only for explicit admin recovery actions.
+It is an agent-resolved placeholder for the installed plugin directory, not a
+shell environment variable. Normal work uses typed MCP tools.
 
 ## Configuration
 
 The default task mode is the read-only `standard` profile: Sonnet, medium
 effort, 8 maximum turns, finalization from turn 6, a $1.50 soft budget, and a
-300-second timeout. Use `/claude-task --write` only when Claude should edit the
-workspace. A write task runs as a tracked job in an isolated standalone clone
-and stops at `awaiting_apply`; a separate explicit apply is required. Useful
-task controls include `--task-profile`, `--model`, `--effort`,
-`--max-turns`, `--finalize-at-turn`, `--context`,
-`--max-budget-usd`, `--prompt-file`, `--resume`,
-`--continue`, `--fresh`, and `--background`.
+300-second timeout. Request a write only when Claude should edit the workspace.
+A write task runs as a tracked job in an isolated standalone clone and stops at
+`awaiting_apply`; a separate explicit apply is required. Typed request controls
+include `task_profile`, `model`, `effort`, `max_turns`, `finalize_at_turn`,
+`context`, `max_budget_usd`, `resume_session_id`, `continue_session`, and
+`background`.
 
 Task profiles are explicit resource envelopes:
 
@@ -96,17 +103,18 @@ Task profiles are explicit resource envelopes:
 | `deep` | Opus | high | 16 | 12 | $5.00 | 900s |
 
 `deep` and Opus are never selected from prompt content. Use
-`--task-profile deep` or `--model opus` explicitly. `--model fable` is passed
+`task_profile=deep` or `model=opus` explicitly. `model=fable` is passed
 through unchanged and can override any task or review profile. The plugin does
 not request Haiku and never passes `--fallback-model`; Claude CLI may still
 report internally selected auxiliary models, which remain visible through
 `effective_models` and `model_usage`.
 
-For long inputs, prefer `--prompt-file` so approval and shell displays remain
-compact. `--context summary|diff|full` declares how much context is being sent;
-it does not silently transform the prompt. JSON results and tracked jobs expose
-a compact disclosure summary. `--finalize-at-turn <n>` adds a soft instruction
-to synthesize before the hard `--max-turns` limit is reached.
+`context=summary|diff|full` declares how much context is being sent; it does not
+silently transform the prompt. Explicit read-only continuation uses exactly one
+of `resume_session_id` or `continue_session`; a fresh task is the default and
+isolated writes never resume. Results and tracked jobs expose a compact
+disclosure summary. `finalize_at_turn` adds a soft instruction to synthesize
+before the hard turn limit is reached.
 
 Environment variables:
 
@@ -195,10 +203,10 @@ automatically chaining or falling back across models. Gate, quick, and standard
 request Sonnet; an explicitly selected deep review requests Opus. A review must report examined and skipped files,
 uncertainty, budget exhaustion, and a focused follow-up profile. Use `quick` for
 small scans, `standard` for normal reviews, and `deep` for security, concurrency,
-migrations, or core state machines. CLI budget flags override the selected
+migrations, or core state machines. Typed MCP budget fields override the selected
 profile for one invocation.
 
-Claude's `--max-turns` limits agentic turns; the CLI's reported `num_turns`
+Claude's `--max-turns` limits agentic turns; its reported `num_turns`
 uses a broader usage counter and may be numerically higher. The plugin treats
 the dollar budget as a soft target that Claude CLI can slightly exceed; only the
 wall-clock timeout is enforced by the plugin as a hard execution ceiling. Both
@@ -224,9 +232,9 @@ inline emergency ceiling remains; there is no 96 KiB review coverage limit.
   apply starts but its result cannot be verified, the job enters
   `recovery_required`: no automatic rollback or cleanup is attempted, and the
   retained artifact must be inspected manually.
-- The optional Stop review gate is disabled by default. Enable it with
-  `setup --enable-review-gate`, inspect and trust the hook in Codex, and disable
-  it with `setup --disable-review-gate`. The gate uses its own bounded profile
+- The optional Stop review gate is disabled by default. Explicitly enable or
+  disable it through `claude-companion-admin review-gate enable|disable`; this
+  break-glass path remains available when MCP is down. The gate uses its own bounded profile
   (4 turns, $0.20, 90 seconds by default) and caches unchanged verdicts for 30
   minutes so repeated Stop events do not repeat the same model call.
 - Claude authentication remains in Claude Code's credential store; this plugin
@@ -238,28 +246,19 @@ inline emergency ceiling remains; there is no 96 KiB review coverage limit.
 
 ## Background jobs
 
-Use `--background` for tracked work. The detached worker consumes Claude's
+Request background execution through the relevant Skill/MCP tool. The detached worker consumes Claude's
 `stream-json` events and reports phases such as investigating, editing,
-verifying, retrying, and finalizing. Examples:
-
-```sh
-node scripts/claude-companion.mjs task --background --write "Implement the change"
-node scripts/claude-companion.mjs status --all
-node scripts/claude-companion.mjs status --global --recent 24h
-node scripts/claude-companion.mjs status --global --status failed
-node scripts/claude-companion.mjs status <job-id> --wait --timeout-ms 300000
-node scripts/claude-companion.mjs result
-node scripts/claude-companion.mjs cancel
-node scripts/claude-companion.mjs apply <write-job-id>
-node scripts/claude-companion.mjs discard <write-job-id>
-```
-
-`status` without an ID returns the current Codex session's latest job; `--all`
-returns full workspace history. Explicit `--global` searches all persisted
-workspaces; test jobs stay hidden unless `--include-test` is present. Filters
-include `--recent 30m|24h|7d`, `--status`, and `--purpose`. `result` and `cancel` without an ID select the
-current session's latest applicable job. Session start reconciles stale records.
+verifying, retrying, and finalizing. `claude_jobs_list` returns bounded workspace
+history by default; global scope and filters must be explicit. Status, result,
+cancel, apply, and discard always require a job ID. Waiting is a bounded
+client-side loop over `claude_job_status`; the server does not hold a long poll.
+Session start reconciles stale records.
 Session end prunes old finished records but never terminates active work.
+
+When MCP cannot start, `claude-companion-admin` is limited to doctor/probe,
+review-gate control, job list/reconcile/cancel, and artifact inspect/safe
+discard. It cannot start reviews/tasks or apply an artifact. `partial_apply`
+always requires manual recovery and cannot be auto-discarded.
 
 Terminal phases match their status (`done`, `failed`, `cancelled`, or
 `timed_out`). Claude error subtypes such as `error_max_turns` are retained with

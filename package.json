@@ -7,8 +7,11 @@
   "engines": {
     "node": ">=18"
   },
+  "imports": {
+    "#app/*": "./scripts/lib/*.mjs"
+  },
   "bin": {
-    "claude-companion": "scripts/claude-companion.mjs"
+    "claude-companion-admin": "scripts/claude-admin.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",

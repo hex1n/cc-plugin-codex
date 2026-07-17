@@ -1,21 +1,10 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
-
-const companion = resolve("scripts/claude-companion.mjs");
-
-function run(args, fx) {
-  return new Promise((resolveRun, reject) => {
-    const child = spawn(process.execPath, [companion, ...args], { cwd: fx.cwd, env: fx.env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
-    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-    child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
-    child.once("error", reject); child.once("close", code => resolveRun({ code, stdout, stderr }));
-  });
-}
+import { callMcp, callMcpRaw } from "./helpers/mcp-client.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "claude-job-state-test-")), cwd = join(root, "workspace"), state = join(root, "state"), fake = join(root, "claude");
@@ -33,18 +22,14 @@ console.log(JSON.stringify({type:"result",is_error:false,result:"ok",structured_
   return { cwd, env: { ...process.env, CLAUDE_CODE_EXECUTABLE: fake, CLAUDE_COMPANION_STATE_ROOT: state, CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS: "10000" } };
 }
 
-async function launch(fx, prompt, options = []) {
-  const result = await run(["task", prompt, ...options, "--background", "--json"], fx);
-  assert.equal(result.code, 0, result.stderr);
-  return JSON.parse(result.stdout).job.id;
+async function launch(fx, prompt, options = {}) {
+  return (await callMcp(fx.env, "claude_task_readonly", { workspace_root: fx.cwd, task: prompt, background: true, ...options })).id;
 }
 
 async function terminalStatus(fx, id) {
   const deadline = Date.now() + 12_000;
   while (Date.now() < deadline) {
-    const result = await run(["status", id, "--json"], fx);
-    assert.equal(result.code, 0, result.stderr);
-    const job = JSON.parse(result.stdout).job;
+    const job = await callMcp(fx.env, "claude_job_status", { workspace_root: fx.cwd, job_id: id });
     if (!["starting", "running", "queued"].includes(job.status)) return job;
     await new Promise(resolveWait => setTimeout(resolveWait, 40));
   }
@@ -56,8 +41,8 @@ test("a successful detached job persists its Claude session", async () => {
   assert.equal(job.status, "completed");
   assert.equal(job.exit_code, 0);
   assert.equal(job.session_id, "persisted-session");
-  const result = await run(["result", id, "--json"], fx);
-  assert.equal(result.code, 0, result.stderr); assert.equal(JSON.parse(result.stdout).session_id, "persisted-session");
+  const result = await callMcp(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id });
+  assert.equal(result.session_id, "persisted-session");
 });
 
 test("a nonzero detached Claude exit is failed, not completed", async () => {
@@ -65,8 +50,8 @@ test("a nonzero detached Claude exit is failed, not completed", async () => {
   assert.equal(job.status, "failed");
   assert.equal(job.exit_code, 7);
   assert.match(job.error, /deliberate failure/);
-  const result = await run(["result", id, "--json"], fx);
-  assert.equal(result.code, 1); assert.match(JSON.parse(result.stderr).error, /deliberate failure/);
+  const result = await callMcpRaw(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id });
+  assert.equal(result.error.code, -32603); assert.match(result.error.message, /deliberate failure/);
 });
 
 test("a max-turns result preserves the actionable Claude error", async () => {
@@ -87,18 +72,18 @@ test("a detached budget error preserves usage and cost", async () => {
   assert.equal(job.total_cost_usd, 0.25);
   assert.equal(job.num_turns, 2);
   assert.equal(job.usage.output_tokens, 5);
-  const result = await run(["result", id, "--json"], fx), error = JSON.parse(result.stderr);
-  assert.equal(result.code, 1); assert.equal(error.error_kind, "max_budget"); assert.equal(error.session_id, "budget-session"); assert.equal(error.requested_model, "sonnet"); assert.equal(error.total_cost_usd, 0.25); assert.equal(error.usage.output_tokens, 5);
+  const result = await callMcpRaw(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id }), error = result.error.data;
+  assert.equal(result.error.code, -32603); assert.equal(error.error_kind, "max_budget"); assert.equal(error.session_id, "budget-session"); assert.equal(error.requested_model, "sonnet"); assert.equal(error.total_cost_usd, 0.25); assert.equal(error.usage.output_tokens, 5);
 });
 
 test("a failed resumed job exposes its parent and cumulative chain cost in result", async () => {
   const fx = await fixture(), parentId = await launch(fx, "success");
   await terminalStatus(fx, parentId);
-  const id = await launch(fx, "max-budget", ["--resume", "persisted-session"]), job = await terminalStatus(fx, id);
+  const id = await launch(fx, "max-budget", { resume_session_id: "persisted-session" }), job = await terminalStatus(fx, id);
   assert.equal(job.parent_job_id, parentId);
   assert.equal(job.cumulative_chain_cost_usd, 0.35);
-  const result = await run(["result", id, "--json"], fx), error = JSON.parse(result.stderr);
-  assert.equal(result.code, 1);
+  const result = await callMcpRaw(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id }), error = result.error.data;
+  assert.equal(result.error.code, -32603);
   assert.equal(error.parent_job_id, parentId);
   assert.equal(error.cumulative_chain_cost_usd, 0.35);
 });
