@@ -1,0 +1,114 @@
+Command: npm run check
+Working directory: /Users/hex1n/cc-plugin-codex
+Exit code: 0
+
+> cc-plugin-codex@0.1.0 check
+> node scripts/check.mjs
+
+✔ admin CLI rejects normal product commands
+✔ admin doctor remains useful when the MCP manifest is unavailable
+✔ admin review-gate controls remain available without MCP
+✔ admin MCP probe performs only initialize and tool discovery
+✔ admin MCP probe reports a broken server without affecting offline gate controls
+✔ admin jobs list and reconcile use explicit workspace state
+✔ admin recovery commands reject list-only filters
+✔ admin artifact inspection refuses to discard partial apply recovery state
+✔ detached MCP jobs expose status, safe metadata, and explicit results
+✔ a running detached MCP job can be cancelled by explicit id
+✔ explicit MCP resume links background jobs and cumulative chain cost
+✔ stream-json parser handles chunk boundaries and reports malformed lines
+✔ stream events map to stable job phases
+✔ Claude result subtypes map to actionable stable errors
+✔ append-only event log excludes prompt and tool inputs
+✔ bundled skills use MCP for normal flows and reserve admin for explicit gate control
+✔ result-producing skills require usage metrics to be reported
+✔ config precedence is project over user over environment over defaults
+✔ task profile overrides merge without losing inherited envelope fields
+✔ invalid configuration fails before Claude starts
+✔ review profiles cannot exceed absolute safety ceilings
+✔ review gate environment override is explicit and validated
+✔ PLUGIN_DATA owns plugin job and configuration state
+✔ stateful and Claude-backed skills use permission-aware escalation
+✔ review includes an untracked-only text file
+✔ review uses lightweight context when more than two files changed
+✔ large review manifests are bounded and report omissions
+✔ 100k changed paths keep the review manifest below its emergency envelope
+✔ review diff adapter includes committed changes from an explicit base
+✔ untracked review fingerprints change with same-size same-mtime content
+✔ review diff adapter returns bounded tracked patches and rejects unsafe paths
+✔ a successful detached job persists its Claude session
+✔ a nonzero detached Claude exit is failed, not completed
+✔ a max-turns result preserves the actionable Claude error
+✔ a detached budget error preserves usage and cost
+✔ a failed resumed job exposes its parent and cumulative chain cost in result
+✔ a structured Claude error preserves its subtype and usage even with exit zero
+✔ a zero exit without a valid Claude payload is failed
+✔ a stale active snapshot cannot overwrite a terminal job
+✔ MCP job listing is workspace-scoped, bounded, and cursor-stable
+✔ MCP job listing rejects malformed cursor and non-RFC-3339 timestamps as invalid arguments
+✔ SessionEnd prunes expired terminal artifacts but preserves active and corrupt records
+✔ workspace status isolates a corrupt job record instead of failing
+✔ global status discovers other workspaces and hides E2E jobs by default
+✔ reconciliation does not mislabel a worker after cancellation is requested
+✔ typed MCP lists tools and runs a read-only task through the shared service
+✔ typed read-only tasks preserve explicit resume semantics
+✔ typed doctor reports setup without invoking a model or mutating state
+✔ typed plan review uses the review capability and reports immutable subject metadata
+✔ typed adversarial review is a dedicated read-only MCP capability
+✔ background plan review persists subject metadata without plan content
+✔ background failures preserve plan subject and usage metadata through MCP
+✔ MCP write rejects an unverified executable before workspace creation
+✔ verified temporary plugin copy completes public MCP write discard and apply
+✔ MCP rejects unknown fields before invoking Claude
+✔ MCP rejects oversized adversarial focus before invoking Claude
+✔ plugin manifest exposes the local MCP server
+✔ admin and MCP adapters keep transport-neutral service boundaries
+✔ collects one immutable UTF-8 file relative to the Git root
+✔ allows in-root symlinks but rejects path and symlink escapes
+✔ rejects directories, empty/NUL/invalid UTF-8, and oversized files
+✔ Claude usage metadata survives parsing and result rendering
+✔ token totals fall back to aggregate usage and distinguish unavailable from zero
+✔ plain results expose timing and turns without token usage
+✔ Claude error payloads preserve usage before raising
+✔ review schema rejects oversized structured output
+✔ plan review prompt and schema enforce categorized, located findings
+✔ prompt templates interpolate a strict, versioned contract
+✔ review passes a JSON Schema and returns structured output
+✔ review rejects structured output that violates its schema
+✔ background review status exposes prompt contract metadata
+✔ package and plugin versions share one release base
+✔ CI covers the supported desktop operating systems
+✔ release and operations documentation is present
+✔ admin explicitly enables and disables the review gate
+✔ disabled and recursive Stop hooks pass without invoking Claude
+✔ an enabled gate passes a clean workspace without invoking Claude
+✔ an enabled gate continues Codex when Claude finds actionable issues
+✔ an enabled gate enforces a small budget and caches an unchanged verdict
+✔ an enabled gate continues Codex with setup guidance when Claude fails
+✔ plan-review routing evidence covers external, local, implementation, and code intents
+✔ sandbox compatibility fails closed on version, platform, policy, or prerequisites
+✔ write sandbox settings disable fallback and deny source and sensitive paths
+✔ runtime preflight rejects an unverified Claude version before workspace creation
+✔ a version-spoofing wrapper is rejected by executable identity before invocation
+✔ missing platform prerequisites fail before the Claude executable is called
+✔ SessionStart reconciles dead, overdue, and abandoned workspace jobs
+✔ foreground Claude receives the rendered prompt only through stdin
+✔ background stream-json Claude receives the rendered prompt only through stdin
+✔ nonzero platform termination results are rejected
+✔ monitor records natural completion without a status poll
+✔ monitor terminates and marks an overdue process
+✔ timeout escalates when a Claude child ignores SIGTERM
+✔ foreground timeout also escalates past ignored SIGTERM
+✔ MCP timeout_ms reaches the foreground Claude process
+✔ write artifacts apply explicitly, block overlap, confirm context drift, and discard
+✔ standalone isolated workspace reproduces dirty Git state without touching the source
+✔ repository shape gate rejects submodules, sparse checkout, and LFS before isolation
+✔ versioned repository and backend support matrices match the implementation
+ℹ tests 99
+ℹ suites 0
+ℹ pass 99
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10310.62825
