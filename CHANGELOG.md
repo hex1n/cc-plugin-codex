@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Added a default-off Task Execution Lease for read-only and isolated-write
+  tasks, with durable checkpoints, one explicit typed resume operation,
+  same-session/same-sandbox continuation, cumulative cost accounting, and
+  fail-closed apply, drift, corruption, cancellation, and timeout behavior.
 - Added a default-off, single-invocation Review Evidence Lease path with three
   bounded read-only MCP tools, strict Claude capability isolation, atomic lease
   telemetry, fail-closed startup, and full process-tree cleanup.

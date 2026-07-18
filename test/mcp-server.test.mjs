@@ -39,7 +39,7 @@ test("typed MCP lists tools and runs a read-only task through the shared service
   ]);
   assert.equal(responses.find(value => value.id === 1).result.serverInfo.name, "cc-plugin-codex");
   const names = responses.find(value => value.id === 2).result.tools.map(tool => tool.name);
-  const expected = ["claude_review_changes", "claude_adversarial_review", "claude_review_plan", "claude_task_readonly", "claude_write_task_start", "claude_write_task_apply", "claude_write_task_discard", "claude_job_status", "claude_job_result", "claude_job_cancel", "claude_jobs_list", "claude_doctor"];
+  const expected = ["claude_review_changes", "claude_adversarial_review", "claude_review_plan", "claude_task_readonly", "claude_task_resume", "claude_write_task_start", "claude_write_task_apply", "claude_write_task_discard", "claude_job_status", "claude_job_result", "claude_job_cancel", "claude_jobs_list", "claude_doctor"];
   assert.deepEqual(names, expected);
   const called = responses.find(value => value.id === 3).result;
   assert.equal(called.structuredContent.result, "mcp-ok");

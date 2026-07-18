@@ -2,6 +2,7 @@ import { isProcessRunning, terminateProcessTree } from "./process.mjs";
 import { deleteJob, listJobs, transitionJob } from "./state.mjs";
 import { cleanupWriteArtifact, discardWriteArtifact } from "./patch-artifact.mjs";
 import { cleanupReviewEvidenceRuntime } from "./review-evidence-runtime.mjs";
+import { cleanupTaskExecutionRuntime } from "./task-execution-runtime.mjs";
 
 const DEFAULT_STARTING_TIMEOUT_MS = 60_000;
 
@@ -10,8 +11,30 @@ export async function reconcileJob(job, { now = Date.now() } = {}) {
     const staleAfter = positiveTimeout(process.env.CLAUDE_COMPANION_STARTING_TIMEOUT_MS, DEFAULT_STARTING_TIMEOUT_MS);
     if (age(job.createdAt, now) >= staleAfter) {
       const failed = (await transitionJob(job.cwd, job.id, ["starting"], current => ({ ...current, status: "failed", phase: "failed", errorKind: "starting_timeout", error: `Job remained in starting state for at least ${staleAfter}ms`, finishedAt: new Date(now).toISOString() }))).record;
-      await cleanupReviewControl(failed);
+      await cleanupExecutionControl(failed);
       return failed;
+    }
+    return job;
+  }
+  if (job.status === "resuming" && !job.resumedByJobId) {
+    const child = (await listJobs(job.cwd)).find(candidate => candidate.parentJobId === job.id);
+    if (child) {
+      return (await transitionJob(job.cwd, job.id, ["resuming"], current => ({
+        ...current,
+        resumedByJobId: child.id,
+        resumedAt: current.resumedAt ?? child.createdAt,
+      }))).record;
+    }
+    const staleAfter = positiveTimeout(process.env.CLAUDE_COMPANION_STARTING_TIMEOUT_MS, DEFAULT_STARTING_TIMEOUT_MS);
+    if (age(job.resumeClaimedAt, now) >= staleAfter) {
+      return (await transitionJob(job.cwd, job.id, ["resuming"], current => ({
+        ...current,
+        status: "checkpointed",
+        phase: "checkpointed",
+        resumeEligible: true,
+        resumeClaimId: null,
+        resumeClaimedAt: null,
+      }))).record;
     }
     return job;
   }
@@ -21,13 +44,13 @@ export async function reconcileJob(job, { now = Date.now() } = {}) {
   if (Number.isFinite(deadline) && now >= deadline) {
     await terminateProcessTree(job.pid);
     const timedOut = (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "timed_out", phase: "timed_out", errorKind: "timeout", finishedAt: new Date(now).toISOString() }))).record;
-    await cleanupReviewControl(timedOut);
+    await cleanupExecutionControl(timedOut);
     return timedOut;
   }
   if (!isProcessRunning(job.pid)) {
     await terminateProcessTree(job.pid);
     const failed = (await transitionJob(job.cwd, job.id, ["running"], current => ({ ...current, status: "failed", phase: "failed", errorKind: "worker_lost", error: "Detached worker exited before recording a terminal result", finishedAt: new Date(now).toISOString() }))).record;
-    await cleanupReviewControl(failed);
+    await cleanupExecutionControl(failed);
     return failed;
   }
   return job;
@@ -38,15 +61,15 @@ export async function reconcileWorkspaceJobs(cwd, options) {
   const ttlMs = positiveTimeout(process.env.CLAUDE_COMPANION_WRITE_ARTIFACT_TTL_MS, 7 * 86_400_000);
   return Promise.all(jobs.map(async job => {
     if (job.write && job.cleanupPending && !job.recoveryRequired) return cleanupWriteArtifact(job);
-    if (job.write && !job.recoveryRequired && !["applied", "discarded", "partial_apply"].includes(job.artifactStatus) && !["starting", "running", "queued"].includes(job.status) && age(job.finishedAt ?? job.createdAt, now) >= ttlMs) return discardWriteArtifact({ workspaceRoot: cwd, jobId: job.id });
+    if (job.write && !job.resumedByJobId && !job.recoveryRequired && !["applied", "discarded", "partial_apply"].includes(job.artifactStatus) && !["starting", "running", "queued", "resuming"].includes(job.status) && age(job.finishedAt ?? job.createdAt, now) >= ttlMs) return discardWriteArtifact({ workspaceRoot: cwd, jobId: job.id });
     return job;
   }));
 }
 
 export async function pruneWorkspaceJobs(cwd, { now = Date.now() } = {}) {
   const retentionDays = positiveTimeout(process.env.CLAUDE_COMPANION_RETENTION_DAYS, 30), maxCompleted = positiveTimeout(process.env.CLAUDE_COMPANION_MAX_COMPLETED_JOBS, 100), cutoff = now - retentionDays * 86_400_000;
-  const terminal = (await listJobs(cwd)).filter(job => !["starting", "running", "queued", "corrupt"].includes(job.status)).sort((a, b) => Date.parse(b.finishedAt ?? b.createdAt) - Date.parse(a.finishedAt ?? a.createdAt));
-  const expired = terminal.filter((job, index) => !job.recoveryRequired && job.artifactStatus !== "partial_apply" && (index >= maxCompleted || Date.parse(job.finishedAt ?? job.createdAt) < cutoff));
+  const terminal = (await listJobs(cwd)).filter(job => !["starting", "running", "queued", "resuming", "corrupt"].includes(job.status)).sort((a, b) => Date.parse(b.finishedAt ?? b.createdAt) - Date.parse(a.finishedAt ?? a.createdAt));
+  const expired = terminal.filter((job, index) => !job.resumedByJobId && !job.recoveryRequired && job.artifactStatus !== "partial_apply" && (index >= maxCompleted || Date.parse(job.finishedAt ?? job.createdAt) < cutoff));
   await Promise.all(expired.map(async job => {
     const closed = job.write && !["applied", "discarded"].includes(job.artifactStatus) ? await discardWriteArtifact({ workspaceRoot: cwd, jobId: job.id }) : job;
     if (!closed.cleanupPending) await deleteJob(closed);
@@ -56,4 +79,7 @@ export async function pruneWorkspaceJobs(cwd, { now = Date.now() } = {}) {
 
 function age(value, now) { const timestamp = Date.parse(value); return Number.isFinite(timestamp) ? now - timestamp : Infinity; }
 function positiveTimeout(value, fallback) { const parsed = Number(value); return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback; }
-async function cleanupReviewControl(job) { if (job.reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: job.reviewControlRoot }); }
+async function cleanupExecutionControl(job) {
+  if (job.reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: job.reviewControlRoot });
+  if (job.taskControlRoot) await cleanupTaskExecutionRuntime({ controlRoot: job.taskControlRoot });
+}

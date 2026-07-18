@@ -106,3 +106,15 @@ test("review Evidence Lease is default-off with profile-owned units and can be e
     /must be one of/,
   );
 });
+
+test("Task Execution Lease is default-off and requires an explicit boolean opt-in", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-task-lease-config-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd, { recursive: true });
+  assert.equal((await loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} })).task.executionLeaseEnabled, false);
+  assert.equal((await loadRuntimeConfig({ cwd, home: join(root, "home"), env: { CLAUDE_COMPANION_TASK_EXECUTION_LEASE: "on" } })).task.executionLeaseEnabled, true);
+  await assert.rejects(
+    () => loadRuntimeConfig({ cwd, home: join(root, "home"), env: { CLAUDE_COMPANION_TASK_EXECUTION_LEASE: "sometimes" } }),
+    /must be one of/,
+  );
+});

@@ -19,6 +19,7 @@ export async function finalizeWriteArtifact(job) {
 export async function applyWriteArtifact({ workspaceRoot, jobId, allowContextDrift = false, expectedPatchHash = null }) {
   return withWorkspaceLock(workspaceRoot, async () => {
     const job = await readJob(workspaceRoot, jobId);
+    if (job.status !== "completed" || job.artifactStatus !== "awaiting_apply") throw operationError(`Write artifact is ${job.artifactStatus ?? "unavailable"}`, "artifact_unavailable");
     let transition;
     try { transition = await transitionJob(workspaceRoot, job.id, ["completed"], async current => {
       if (current.artifactStatus === "applied") return current;
@@ -53,7 +54,7 @@ export async function discardWriteArtifact({ workspaceRoot, jobId }) {
   return withWorkspaceLock(workspaceRoot, async () => {
     const job = await readJob(workspaceRoot, jobId);
     if (job.artifactStatus === "partial_apply" || job.recoveryRequired) throw operationError("Write artifact is retained for manual recovery and cannot be discarded", "manual_recovery_required");
-    const transition = await transitionJob(workspaceRoot, job.id, ["completed", "failed", "cancelled", "timed_out"], current => {
+    const transition = await transitionJob(workspaceRoot, job.id, ["completed", "checkpointed", "failed", "cancelled", "timed_out"], current => {
       if (["applied", "discarded"].includes(current.artifactStatus)) return current;
       return { ...current, artifactStatus: "discarded", phase: "discarded", discardedAt: new Date().toISOString() };
     });

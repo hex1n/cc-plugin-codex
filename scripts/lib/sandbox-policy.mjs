@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, chmod, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
 import { pluginPath } from "./paths.mjs";
 import { runCommand } from "./process.mjs";
@@ -65,12 +65,23 @@ export function evaluateSandboxCompatibility({ manifest, claudeVersion, executab
 
 export async function createWriteSandboxSettings({ settingsPath, sourceRoot, isolatedRoot, artifactRoot, stateRoot }) {
   if (!artifactRoot || !stateRoot) throw new Error("artifactRoot and stateRoot are required for write sandbox settings");
-  const replace = value => typeof value === "string" ? value.replaceAll("<SOURCE_ROOT>", sourceRoot).replaceAll("<ISOLATED_ROOT>", isolatedRoot).replaceAll("<ARTIFACT_ROOT>", artifactRoot).replaceAll("<STATE_ROOT>", stateRoot) : Array.isArray(value) ? value.map(replace) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, replace(child)])) : value;
-  const settings = replace(POLICY_TEMPLATE);
+  const settings = sandboxSettings({ sourceRoot, isolatedRoot, artifactRoot, stateRoot });
   await mkdir(dirname(settingsPath), { recursive: true });
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await chmod(settingsPath, 0o600);
-  return { settingsPath, settings, policyVersion: SANDBOX_POLICY_VERSION, policyHash: sandboxPolicyHash() };
+  return { settingsPath: await realpath(settingsPath), settings, policyVersion: SANDBOX_POLICY_VERSION, policyHash: sandboxPolicyHash() };
+}
+
+export async function verifyWriteSandboxSettings({ settingsPath, sourceRoot, isolatedRoot, artifactRoot, stateRoot, expectedPolicyHash, expectedPolicyVersion }) {
+  if (expectedPolicyVersion !== SANDBOX_POLICY_VERSION || expectedPolicyHash !== sandboxPolicyHash()) throw writeResumeError("Persisted sandbox policy identity does not match the active policy");
+  const canonical = await realpath(settingsPath).catch(() => null);
+  if (!canonical || canonical !== settingsPath) throw writeResumeError("Write resume settings path is missing or not canonical");
+  const info = await lstat(canonical);
+  if (!info.isFile() || (info.mode & 0o777) !== 0o600) throw writeResumeError("Write resume settings are not an owner-only regular file");
+  const actual = JSON.parse(await readFile(canonical, "utf8"));
+  const expected = sandboxSettings({ sourceRoot, isolatedRoot, artifactRoot, stateRoot });
+  if (canonicalJson(actual) !== canonicalJson(expected)) throw writeResumeError("Write resume settings do not match the persisted sandbox roots");
+  return { settingsPath: canonical, policyVersion: SANDBOX_POLICY_VERSION, policyHash: sandboxPolicyHash() };
 }
 
 export async function writeSandboxPreflight({ claudeExecutable = process.env.CLAUDE_CODE_EXECUTABLE ?? "claude", compatibilityPath = SANDBOX_COMPATIBILITY_PATH, platform = process.platform } = {}) {
@@ -117,6 +128,13 @@ async function resolveExecutable(executable) {
 }
 
 function preflightEnvironment() { const { CLAUDE_CODE_EXECUTABLE, NODE_OPTIONS, NODE_PATH, BASH_ENV, ENV, ...env } = process.env; return env; }
+
+function sandboxSettings({ sourceRoot, isolatedRoot, artifactRoot, stateRoot }) {
+  const replace = value => typeof value === "string" ? value.replaceAll("<SOURCE_ROOT>", sourceRoot).replaceAll("<ISOLATED_ROOT>", isolatedRoot).replaceAll("<ARTIFACT_ROOT>", artifactRoot).replaceAll("<STATE_ROOT>", stateRoot) : Array.isArray(value) ? value.map(replace) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, replace(child)])) : value;
+  return replace(POLICY_TEMPLATE);
+}
+
+function writeResumeError(message) { return Object.assign(new Error(message), { errorKind: "write_resume_invalid" }); }
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;

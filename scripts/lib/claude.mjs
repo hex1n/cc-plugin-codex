@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { REVIEW_EVIDENCE_QUALIFIED_TOOLS } from "./review-evidence-contract.mjs";
 import { createReviewInitValidator, createStreamJsonParser } from "./claude-stream.mjs";
 import { cleanupReviewEvidenceRuntime, readReviewEvidenceState } from "./review-evidence-runtime.mjs";
+import { TASK_EXECUTION_QUALIFIED_TOOLS } from "./task-execution-contract.mjs";
+import { cleanupTaskExecutionRuntime } from "./task-execution-runtime.mjs";
 // Flags/JSON verified 2026-07-11 against Claude Code 2.1.207.
 export const REVIEW_DIFF_ADAPTER = fileURLToPath(new URL("../review-diff.mjs", import.meta.url));
 export const CLAUDE_CLI = Object.freeze({ executable: process.env.CLAUDE_CODE_EXECUTABLE ?? "claude", baseArgs: ["--print", "--output-format", "json"], profiles: Object.freeze({ review: ["--safe-mode", "--permission-mode", "plan", "--allowedTools", `Read,Grep,Glob,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(node ${REVIEW_DIFF_ADAPTER}:*)`], task: ["--permission-mode", "plan"] }) });
@@ -45,9 +47,11 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   }
   return parsed;
 }
-export function buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false, settingsPath = null, settingSources = null, reviewEvidence = null, claudeExecutable = CLAUDE_CLI.executable } = {}) {
+export function buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false, settingsPath = null, settingSources = null, reviewEvidence = null, taskExecution = null, claudeExecutable = CLAUDE_CLI.executable } = {}) {
   if (!CLAUDE_CLI.profiles[profile]) throw new Error(`Unknown Claude capability profile: ${profile}`);
   if (reviewEvidence && profile !== "review") throw new Error("Review Evidence Lease is only valid for the review profile");
+  if (taskExecution && profile !== "task") throw new Error("Task Execution Lease is only valid for the task profile");
+  if (reviewEvidence && taskExecution) throw new Error("Review and task execution controllers are mutually exclusive");
   if (reviewEvidence && (settingsPath || settingSources !== null)) throw new Error("Review Evidence Lease uses a fixed settings contract");
   const profileArgs = reviewEvidence ? [
     "--setting-sources", "",
@@ -57,16 +61,19 @@ export function buildClaudeInvocation(profile, prompt, { resume, continueSession
     "--tools", "",
     "--allowedTools", REVIEW_EVIDENCE_QUALIFIED_TOOLS.join(","),
     "--permission-mode", "dontAsk",
-  ] : profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile];
+  ] : [
+    ...(profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile]),
+    ...(taskExecution ? ["--strict-mcp-config", "--mcp-config", taskExecution.mcpConfigPath, "--allowedTools", TASK_EXECUTION_QUALIFIED_TOOLS.join(",")] : []),
+  ];
   const session = resume ? ["--resume", resume] : continueSession ? ["--continue"] : [];
   const runtime = [...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : []), ...(maxTurns ? ["--max-turns", String(maxTurns)] : []), ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : [])];
   const schema = schemaPath ? ["--json-schema", schemaForClaudeCli(schemaPath)] : [];
   const settings = [...(settingSources !== null ? ["--setting-sources", settingSources] : []), ...(settingsPath ? ["--settings", settingsPath] : [])];
-  const baseArgs = stream || reviewEvidence ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
+  const baseArgs = stream || reviewEvidence || taskExecution ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
   return { command: claudeExecutable, args: [...baseArgs, ...profileArgs, ...session, ...runtime, ...schema, ...settings], stdin: prompt };
 }
-export async function runClaude({ profile, prompt, cwd, executionCwd = cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence = null, leaseStatePath = null }) {
-  const invocation = buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence });
+export async function runClaude({ profile, prompt, cwd, executionCwd = cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence = null, leaseStatePath = null, taskExecution = null, taskStatePath = null }) {
+  const invocation = buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence, taskExecution });
   const initValidator = reviewEvidence ? createReviewInitValidator() : null;
   let malformedStream = false;
   const parser = reviewEvidence ? createStreamJsonParser({ onEvent: event => initValidator.observe(event), onMalformed: () => { malformedStream = true; } }) : null;
@@ -129,13 +136,13 @@ function evidenceLeaseFromState(state) {
     filesSkipped: state.filesSkipped,
   };
 }
-export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null, settingsPath = null, settingSources = null, reviewEvidence = null, leaseStatePath = null, reviewControlRoot = null, claudeExecutable = CLAUDE_CLI.executable, finalizeWrite = false, metadata = {} }) {
+export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null, settingsPath = null, settingSources = null, reviewEvidence = null, leaseStatePath = null, reviewControlRoot = null, taskExecution = null, taskStatePath = null, taskControlRoot = null, claudeExecutable = CLAUDE_CLI.executable, finalizeWrite = false, metadata = {} }) {
   const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, effort, purpose, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, metadata });
   let workerPid = null;
   try {
     const requested = positiveTimeout(requestedTimeoutMs, null), background = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, null);
     const timeoutMs = requested && background ? Math.min(requested, background) : requested ?? background ?? 3_600_000;
-    await writeJobRequest(job, { profile, prompt, executionCwd, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, settingsPath, settingSources, reviewEvidence, leaseStatePath, reviewControlRoot, claudeExecutable, finalizeWrite, stream: true });
+    await writeJobRequest(job, { profile, prompt, executionCwd, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, settingsPath, settingSources, reviewEvidence, leaseStatePath, reviewControlRoot, taskExecution, taskStatePath, taskControlRoot, claudeExecutable, finalizeWrite, stream: true });
     const worker = fileURLToPath(new URL("../claude-job-worker.mjs", import.meta.url));
     ({ pid: workerPid } = await spawnDetachedSilent(process.execPath, [worker, cwd, job.id], { cwd, env: process.env }));
     const running = await saveJob({ ...job, pid: workerPid, workerPid, status: "running", timeoutMs, deadlineAt: new Date(Date.now() + timeoutMs).toISOString(), startedAt: new Date().toISOString() });
@@ -145,6 +152,7 @@ export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd,
   } catch (error) {
     if (workerPid) await terminateProcessTree(workerPid);
     if (reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: reviewControlRoot }).catch(() => {});
+    if (taskControlRoot) await cleanupTaskExecutionRuntime({ controlRoot: taskControlRoot }).catch(() => {});
     await saveJob({ ...job, pid: workerPid, workerPid, status: "failed", error: error.message, finishedAt: new Date().toISOString() });
     throw error;
   }

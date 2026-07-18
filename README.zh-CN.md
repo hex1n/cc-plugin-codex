@@ -75,6 +75,7 @@ Task profile 是显式资源 envelope：
 | 变量 | 默认值 | 用途 |
 | --- | ---: | --- |
 | `CLAUDE_COMPANION_TASK_PROFILE` | `standard` | task 默认 profile：`quick`、`standard` 或 `deep` |
+| `CLAUDE_COMPANION_TASK_EXECUTION_LEASE` | `off` | 启用持久 task 检查点与显式 typed resume |
 | `CLAUDE_COMPANION_MODEL` | 未设置 | task 模型覆盖，包括 `sonnet`、`opus` 或 `fable` |
 | `CLAUDE_COMPANION_EFFORT` | 未设置 | task effort 覆盖：`low`、`medium` 或 `high` |
 | `CLAUDE_COMPANION_MAX_TURNS` | 未设置 | task 最大轮数覆盖 |
@@ -98,6 +99,7 @@ Task profile 是显式资源 envelope：
 {
   "task": {
     "profile": "standard",
+    "executionLeaseEnabled": false,
     "profiles": {
       "quick": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.5, "timeoutMs": 120000 },
       "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 8, "finalizeAtTurn": 6, "maxBudgetUsd": 1.5, "timeoutMs": 300000 },
@@ -119,6 +121,13 @@ Task profile 是显式资源 envelope：
   "jobs": { "backgroundTimeoutMs": 3600000 }
 }
 ```
+
+启用 Task Execution Lease 后，只读或隔离写 task 在触发 turn/cost 断路器时可返回
+`checkpointed`，其中包含 session、已完成工作、剩余工作、验证信息、usage 与累计成本。
+插件不会自动续跑；只有显式调用 `claude_task_resume` 并传入该 job ID 才会继续。
+隔离写任务只能在原有且重新验证通过的 sandbox 中续跑，未完成时禁止 apply，只有收到
+有效完成回执后才进入 `awaiting_apply`。模型、effort、profile、turn、预算、timeout 与
+background 仍由调用方显式控制，不会自动 fallback 或扩大预算。
 
 Claude 启动前会拒绝未知 section、未知字段、无效 JSON、非正数限制，以及超过内置安全上限的 review 配置。写权限不能写入配置文件；每个可写任务必须显式调用隔离写 tool，并在完成后显式 apply。
 

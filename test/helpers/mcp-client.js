@@ -3,15 +3,15 @@ import { resolve } from "node:path";
 
 const server = resolve("mcp/server.mjs");
 
-export async function callMcp(env, name, arguments_) {
-  const response = await callMcpRaw(env, name, arguments_);
+export async function callMcp(env, name, arguments_, serverPath = server) {
+  const response = await callMcpRaw(env, name, arguments_, serverPath);
   if (response.error) throw Object.assign(new Error(response.error.message), { response });
   return response.result.structuredContent;
 }
 
-export async function callMcpRaw(env, name, arguments_) {
+export async function callMcpRaw(env, name, arguments_, serverPath = server) {
   const input = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: arguments_ } })}\n`;
-  const outcome = await spawnCapture(process.execPath, [server], { cwd: resolve("."), env, stdin: input });
+  const outcome = await spawnCapture(process.execPath, [serverPath], { cwd: resolve("."), env, stdin: input });
   if (outcome.code !== 0) throw new Error(`MCP server exited ${outcome.code}: ${outcome.stderr}`);
   return outcome.stdout.trim().split(/\r?\n/).filter(Boolean).map(JSON.parse).find(value => value.id === 1);
 }

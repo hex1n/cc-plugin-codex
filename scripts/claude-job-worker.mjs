@@ -3,11 +3,13 @@ import { appendFileSync, chmodSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { buildClaudeInvocation, parseClaudeJson } from "./lib/claude.mjs";
-import { appendStreamEvent, createReviewInitValidator, createStreamJsonParser, errorForStreamResult, progressForStreamEvent } from "./lib/claude-stream.mjs";
+import { appendStreamEvent, createReviewInitValidator, createStreamJsonParser, createTaskExecutionInitValidator, errorForStreamResult, progressForStreamEvent } from "./lib/claude-stream.mjs";
 import { jobArtifacts, readJob, takeJobRequest, transitionJob } from "./lib/state.mjs";
 import { finalizeWriteArtifact } from "./lib/patch-artifact.mjs";
 import { cleanupReviewEvidenceRuntime, readReviewEvidenceState } from "./lib/review-evidence-runtime.mjs";
 import { terminateDescendantTree } from "./lib/process.mjs";
+import { checkpointFromBreaker, checkpointFromIncomplete, projectTaskExecutionState } from "./lib/task-execution-lease.mjs";
+import { cleanupTaskExecutionRuntime, readTaskExecutionState } from "./lib/task-execution-runtime.mjs";
 
 await runWorker();
 
@@ -23,7 +25,8 @@ try {
   let malformedStream = false;
   let streamError = null;
   let finalEvidenceState = null;
-  const initValidator = request.reviewEvidence ? createReviewInitValidator() : null;
+  let finalTaskState = null;
+  const initValidator = request.reviewEvidence ? createReviewInitValidator() : request.taskExecution ? createTaskExecutionInitValidator() : null;
   const invocation = buildClaudeInvocation(request.profile, request.prompt, request);
   const outcome = await runToLogs(invocation, { ...job, ...artifacts, executionCwd: request.executionCwd ?? job.cwd }, event => {
     const initialized = initValidator?.observe(event) ?? false;
@@ -66,8 +69,25 @@ try {
       return;
     }
   }
+  if (request.taskExecution) {
+    try {
+      if (outcome.inspectionError) throw outcome.inspectionError;
+      initValidator.assertReady();
+      finalTaskState = await readTaskExecutionState(request.taskStatePath, { expectedParentPid: outcome.pid });
+    } catch (error) {
+      await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: "mcp_startup", suggestedAction: error.suggestedAction ?? "inspect_task_execution_runtime", error: error.message, finishedAt: new Date().toISOString() }));
+      return;
+    }
+  }
   if (outcome.code !== 0) {
     const stderr = (await readFile(artifacts.stderrPath, "utf8")).trim();
+    if (request.taskExecution) {
+      const checkpoint = checkpointFromBreaker({ lease: latest.taskExecutionLease, state: finalTaskState, error: streamError, sessionId: streamError?.sessionId ?? latest.sessionId });
+      if (checkpoint) {
+        await transitionJob(cwd, id, ["running"], current => ({ ...current, ...checkpoint, artifactStatus: current.write ? "checkpointed" : current.artifactStatus, sandboxVerified: current.write ? true : current.sandboxVerified, exitCode: outcome.code, signal: outcome.signal, errorKind: streamError.errorKind, upstreamErrorSubtype: streamError.upstreamErrorSubtype ?? null, sessionId: streamError.sessionId ?? current.sessionId, usage: streamError.usage ?? null, modelUsage: streamError.modelUsage ?? null, effectiveModels: streamError.effectiveModels ?? null, totalCostUsd: streamError.totalCostUsd ?? null, cumulativeChainCostUsd: cumulativeChainCost(current, streamError.totalCostUsd), numTurns: streamError.numTurns ?? null, durationMs: streamError.durationMs ?? null, durationApiMs: streamError.durationApiMs ?? null, costBudgetExhausted: streamError.errorKind === "max_budget", turnLimitReached: streamError.errorKind === "max_turns", error: streamError.error ?? (stderr || `Claude exited with code ${outcome.code}`), finishedAt: new Date().toISOString() }));
+        return;
+      }
+    }
     await transitionJob(cwd, id, ["running"], current => ({ ...current, status: "failed", phase: "failed", exitCode: outcome.code, signal: outcome.signal, errorKind: outcome.signal ? "signal" : streamError?.errorKind ?? "nonzero_exit", upstreamErrorSubtype: streamError?.upstreamErrorSubtype ?? null, suggestedAction: streamError?.suggestedAction ?? null, sessionId: streamError?.sessionId ?? current.sessionId, usage: streamError?.usage ?? null, modelUsage: streamError?.modelUsage ?? null, effectiveModels: streamError?.effectiveModels ?? null, totalCostUsd: streamError?.totalCostUsd ?? null, cumulativeChainCostUsd: cumulativeChainCost(current, streamError?.totalCostUsd), numTurns: streamError?.numTurns ?? null, durationMs: streamError?.durationMs ?? null, durationApiMs: streamError?.durationApiMs ?? null, costBudgetExhausted: streamError?.errorKind === "max_budget", turnLimitReached: streamError?.errorKind === "max_turns", error: streamError?.error ?? (stderr || `Claude exited with code ${outcome.code}`), finishedAt: new Date().toISOString() }));
     return;
   }
@@ -77,6 +97,55 @@ try {
   }
   try {
     const parsed = parseClaudeJson(await readFile(artifacts.stdoutPath, "utf8"), { schemaPath: request.schemaPath ?? null });
+    if (request.taskExecution && finalTaskState?.phase !== "completed") {
+      const checkpoint = checkpointFromIncomplete({ lease: latest.taskExecutionLease, state: finalTaskState, sessionId: parsed.sessionId });
+      if (checkpoint) {
+        await transitionJob(cwd, id, ["running"], current => ({
+          ...current,
+          ...checkpoint,
+          artifactStatus: current.write ? "checkpointed" : current.artifactStatus,
+          sandboxVerified: current.write ? true : current.sandboxVerified,
+          exitCode: 0,
+          signal: outcome.signal,
+          sessionId: parsed.sessionId,
+          usage: parsed.usage,
+          modelUsage: parsed.modelUsage,
+          effectiveModels: parsed.effectiveModels,
+          totalCostUsd: parsed.totalCostUsd,
+          cumulativeChainCostUsd: cumulativeChainCost(current, parsed.totalCostUsd),
+          numTurns: parsed.numTurns,
+          durationMs: parsed.durationMs,
+          durationApiMs: parsed.durationApiMs,
+          costBudgetExhausted: false,
+          turnLimitReached: false,
+          error: "Claude exited successfully without a task_complete receipt",
+          finishedAt: new Date().toISOString(),
+        }));
+      } else {
+        await transitionJob(cwd, id, ["running"], current => ({
+          ...current,
+          status: "failed",
+          phase: "failed",
+          exitCode: 0,
+          signal: outcome.signal,
+          errorKind: "task_completion_missing",
+          suggestedAction: "inspect_task_execution_runtime",
+          sessionId: parsed.sessionId,
+          usage: parsed.usage,
+          modelUsage: parsed.modelUsage,
+          effectiveModels: parsed.effectiveModels,
+          totalCostUsd: parsed.totalCostUsd,
+          cumulativeChainCostUsd: cumulativeChainCost(current, parsed.totalCostUsd),
+          numTurns: parsed.numTurns,
+          durationMs: parsed.durationMs,
+          durationApiMs: parsed.durationApiMs,
+          resumeEligible: false,
+          error: "Claude exited successfully without task_complete or a resumable checkpoint",
+          finishedAt: new Date().toISOString(),
+        }));
+      }
+      return;
+    }
     const artifact = request.finalizeWrite ? await finalizeWriteArtifact(latest) : {};
     await transitionJob(cwd, id, ["running"], current => ({
       ...current,
@@ -97,6 +166,9 @@ try {
       durationApiMs: parsed.durationApiMs,
       evidenceLease: finalEvidenceState ? evidenceLeaseFromState(finalEvidenceState) : current.evidenceLease,
       evidenceLeaseExhausted: finalEvidenceState?.exhausted ?? false,
+      taskExecutionLease: finalTaskState ? projectTaskExecutionState(current.taskExecutionLease, finalTaskState) : current.taskExecutionLease,
+      taskCompletion: finalTaskState?.completion ?? current.taskCompletion,
+      resumeEligible: false,
       costBudgetExhausted: false,
       turnLimitReached: false,
       finishedAt: new Date().toISOString()
@@ -131,6 +203,7 @@ try {
   if (["starting", "running"].includes(latest.status)) await transitionJob(cwd, id, ["starting", "running"], current => ({ ...current, status: "failed", phase: "failed", errorKind: "worker_error", error: error.message, finishedAt: new Date().toISOString() }));
 } finally {
   if (job.reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: job.reviewControlRoot }).catch(() => {});
+  if (job.taskControlRoot) await cleanupTaskExecutionRuntime({ controlRoot: job.taskControlRoot }).catch(() => {});
 }
 }
 
@@ -166,7 +239,7 @@ function runToLogs(invocation, record, onEvent, onMalformed, { onSpawn = null, l
     if (onSpawn) Promise.resolve(onSpawn(child.pid)).catch(abort);
     const parser = createStreamJsonParser({
       onEvent: event => {
-        try { initialized ||= onEvent(event) === true; }
+        try { const eventInitialized = onEvent(event) === true; initialized ||= eventInitialized; }
         catch (error) { abort(error); }
       },
       onMalformed,

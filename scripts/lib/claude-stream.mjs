@@ -1,5 +1,6 @@
 import { appendFile, chmod } from "node:fs/promises";
 import { REVIEW_EVIDENCE_SERVER_KEY, REVIEW_EXPECTED_INIT_TOOLS } from "./review-evidence-contract.mjs";
+import { TASK_EXECUTION_QUALIFIED_TOOLS, TASK_EXECUTION_SERVER_KEY } from "./task-execution-contract.mjs";
 
 /**
  * Incrementally parse Claude's newline-delimited stream-json output.
@@ -77,6 +78,28 @@ export function createReviewInitValidator() {
   };
 }
 
+export function createTaskExecutionInitValidator() {
+  let ready = false;
+  return {
+    observe(event) {
+      if (event?.type !== "system" || event.subtype !== "init") return false;
+      const serversValue = event.mcp_servers ?? event.mcpServers ?? [];
+      const servers = Array.isArray(serversValue) ? serversValue : Object.entries(serversValue).map(([name, value]) => ({ name, ...(typeof value === "object" ? value : { status: value }) }));
+      const server = servers.find(value => (value.name ?? value.server) === TASK_EXECUTION_SERVER_KEY);
+      if (!server || server.status !== "connected") throw taskMcpStartupError("Required task execution MCP server is not connected");
+      const actual = (event.tools ?? []).map(value => typeof value === "string" ? value : value?.name).filter(Boolean);
+      const controllerTools = actual.filter(value => value.startsWith(`mcp__${TASK_EXECUTION_SERVER_KEY}__`));
+      if (controllerTools.length !== new Set(controllerTools).size || !sameSet(controllerTools, [...TASK_EXECUTION_QUALIFIED_TOOLS])) throw taskMcpStartupError(`Claude init task execution tool set does not match the controller contract (expected ${TASK_EXECUTION_QUALIFIED_TOOLS.join(", ")})`);
+      ready = true;
+      return true;
+    },
+    assertReady() {
+      if (!ready) throw taskMcpStartupError("Claude returned no valid task execution MCP init event");
+      return true;
+    },
+  };
+}
+
 export function progressForStreamEvent(event) {
   if (event?.type === "system" && event.subtype === "api_retry") return { phase: "retrying", progressMessage: `API retry ${event.attempt ?? ""}`.trim() };
   if (event?.type === "retry") return { phase: "retrying", progressMessage: `API retry ${event.attempt ?? ""}`.trim() };
@@ -130,4 +153,8 @@ function sameSet(left, right) {
 
 function mcpStartupError(message) {
   return Object.assign(new Error(message), { errorKind: "mcp_startup", suggestedAction: "inspect_review_evidence_runtime" });
+}
+
+function taskMcpStartupError(message) {
+  return Object.assign(new Error(message), { errorKind: "mcp_startup", suggestedAction: "inspect_task_execution_runtime" });
 }

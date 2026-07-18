@@ -121,6 +121,7 @@ Environment variables:
 | Variable | Default | Purpose |
 | --- | ---: | --- |
 | `CLAUDE_COMPANION_TASK_PROFILE` | `standard` | Default task profile (`quick`, `standard`, or `deep`) |
+| `CLAUDE_COMPANION_TASK_EXECUTION_LEASE` | `off` | Enable durable task checkpoints and explicit typed resume |
 | `CLAUDE_COMPANION_MODEL` | unset | Task model override, including `sonnet`, `opus`, or `fable` |
 | `CLAUDE_COMPANION_EFFORT` | unset | Task effort override (`low`, `medium`, or `high`) |
 | `CLAUDE_COMPANION_MAX_TURNS` | unset | Task turn-limit override |
@@ -148,6 +149,7 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
 {
   "task": {
     "profile": "standard",
+    "executionLeaseEnabled": false,
     "profiles": {
       "quick": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.5, "timeoutMs": 120000 },
       "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 8, "finalizeAtTurn": 6, "maxBudgetUsd": 1.5, "timeoutMs": 300000 },
@@ -169,6 +171,16 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
   "jobs": { "backgroundTimeoutMs": 3600000 }
 }
 ```
+
+When Task Execution Lease is enabled, a read-only or isolated-write task that
+reaches a turn or cost breaker can return `checkpointed` with its session,
+completed work, remaining work, verification, usage, and cumulative cost.
+Continuation never happens automatically: call `claude_task_resume` with the
+checkpointed job ID. Isolated writes resume only in the verified original
+sandbox, remain non-applicable while incomplete, and reach `awaiting_apply`
+only after a valid completion receipt. Model, effort, profile, turn, budget,
+timeout, and background controls remain explicit; no fallback or budget
+expansion is performed.
 
 Unknown sections and fields, malformed JSON, non-positive numeric limits, and
 review settings above the built-in safety ceilings are rejected before Claude

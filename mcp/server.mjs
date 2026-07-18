@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import readline from "node:readline";
 import { readFile } from "node:fs/promises";
-import { applyWriteResult, cancelJob, discardWriteResult, getJobResult, getJobStatus, reviewChanges, reviewChangesAdversarial, reviewPlan, runReadonlyTask, startIsolatedWrite } from "#app/service";
+import { applyWriteResult, cancelJob, discardWriteResult, getJobResult, getJobStatus, resumeTask, reviewChanges, reviewChangesAdversarial, reviewPlan, runReadonlyTask, startIsolatedWrite } from "#app/service";
 import { renderError, renderJob, renderResult } from "#app/render";
 import { listClaudeJobs } from "#app/job-query-service";
 import { inspectDoctor } from "#app/doctor-service";
@@ -15,6 +15,7 @@ const tools = [
   tool("claude_adversarial_review", "Challenge repository changes read-only with Claude Code", { workspace_root: string(), focus: string({ maxLength: 2000 }), base: string(), review_profile: profile(), ...commonRuntime }, ["workspace_root"]),
   tool("claude_review_plan", "Review one repository plan file read-only with Claude Code", { workspace_root: string(), target_file: string(), review_profile: profile(), ...commonRuntime }, ["workspace_root", "target_file"]),
   tool("claude_task_readonly", "Run a read-only project task with Claude Code", { workspace_root: string(), task: string(), context: { type: "string", enum: ["summary", "diff", "full"] }, task_profile: profile(), resume_session_id: string(), continue_session: { type: "boolean" }, ...commonRuntime }, ["workspace_root", "task"]),
+  tool("claude_task_resume", "Explicitly resume one Task Execution Lease checkpoint", { workspace_root: string(), job_id: string(), task_profile: profile(), ...commonRuntime }, ["workspace_root", "job_id"]),
   tool("claude_write_task_start", "Start a sandboxed write task in an isolated clone; never applies automatically", { workspace_root: string(), task: string(), context: { type: "string", enum: ["summary", "diff", "full"] }, task_profile: profile(), ...commonRuntime }, ["workspace_root", "task"]),
   tool("claude_write_task_apply", "Apply a completed isolated write artifact to its source workspace", { workspace_root: string(), job_id: string(), allow_context_drift: { type: "boolean" }, expected_patch_hash: string() }, ["workspace_root", "job_id"]),
   tool("claude_write_task_discard", "Discard an isolated write artifact and clean its workspace", { workspace_root: string(), job_id: string() }, ["workspace_root", "job_id"]),
@@ -30,6 +31,7 @@ const handlers = {
   claude_adversarial_review: reviewChangesAdversarial,
   claude_review_plan: reviewPlan,
   claude_task_readonly: runReadonlyTask,
+  claude_task_resume: resumeTask,
   claude_write_task_start: startIsolatedWrite,
   claude_write_task_apply: applyWriteResult,
   claude_write_task_discard: discardWriteResult,

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readFile, readdir, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { findGitRoot } from "./git.mjs";
 import { runCommand } from "./process.mjs";
 
@@ -74,7 +74,7 @@ export async function createIsolatedWriteWorkspace({ sourceRoot, workspaceRoot =
     if ((await git(["rev-parse", "HEAD"], artifactRoot)).stdout.trim() !== baselineCommit) throw new Error("Trusted artifact clone does not match the isolated baseline");
     const afterStatus = (await git(["status", "--porcelain=v1", "-uall"], root)).stdout;
     if (afterStatus !== sourceStatus || JSON.stringify(await snapshotWorkspace(root)) !== JSON.stringify(sourceSnapshot)) throw new Error("Source workspace changed while preparing isolated baseline");
-    return { backend: "standalone-clone-v1", sourceRoot: root, isolatedRoot, artifactRoot, sourceHead, sourceStatus, baselineCommit, baselineFingerprint: fingerprint(sourceSnapshot), baselineRecords: sourceSnapshot };
+    return { backend: "standalone-clone-v1", sourceRoot: root, isolatedRoot: await realpath(isolatedRoot), artifactRoot: await realpath(artifactRoot), sourceHead, sourceStatus, baselineCommit, baselineFingerprint: fingerprint(sourceSnapshot), baselineRecords: sourceSnapshot };
   } catch (error) {
     await Promise.all([isolatedRoot, artifactRoot].map(path => rm(path, { recursive: true, force: true })));
     throw error;
@@ -84,6 +84,22 @@ export async function createIsolatedWriteWorkspace({ sourceRoot, workspaceRoot =
 export async function removeIsolatedWriteWorkspace(workspace) {
   if (!workspace?.isolatedRoot) throw new Error("isolatedRoot is required");
   await Promise.all([workspace.isolatedRoot, workspace.artifactRoot].filter(Boolean).map(path => rm(path, { recursive: true, force: true })));
+}
+
+export async function verifyIsolatedWriteWorkspaceForResume(job, { workspaceRoot = WRITE_WORKSPACE_ROOT } = {}) {
+  if (!job?.sourceRoot || !job.isolatedRoot || !job.artifactRoot || !job.baselineCommit || !job.baselineFingerprint) throw writeResumeError("Write checkpoint is missing workspace identity");
+  const canonicalRoot = await realpath(workspaceRoot).catch(() => null);
+  const sourceRoot = await realpath(job.sourceRoot).catch(() => null);
+  const isolatedRoot = await realpath(job.isolatedRoot).catch(() => null);
+  const artifactRoot = await realpath(job.artifactRoot).catch(() => null);
+  if (!canonicalRoot || !sourceRoot || !isolatedRoot || !artifactRoot) throw writeResumeError("Write checkpoint workspace is missing");
+  if (!isContained(canonicalRoot, isolatedRoot) || !isContained(canonicalRoot, artifactRoot) || isolatedRoot === artifactRoot) throw writeResumeError("Write checkpoint workspace escaped its configured root");
+  if (sourceRoot !== job.cwd) throw writeResumeError("Write checkpoint source identity changed");
+  if (fingerprint(await snapshotWorkspace(sourceRoot)) !== job.baselineFingerprint) throw writeResumeError("Source workspace changed after the write checkpoint");
+  if ((await git(["rev-parse", "HEAD"], isolatedRoot)).stdout.trim() !== job.baselineCommit) throw writeResumeError("Isolated workspace baseline commit changed");
+  if ((await git(["rev-parse", "HEAD"], artifactRoot)).stdout.trim() !== job.baselineCommit) throw writeResumeError("Trusted artifact baseline commit changed");
+  if ((await git(["status", "--porcelain=v1", "-uall"], artifactRoot)).stdout) throw writeResumeError("Trusted artifact workspace changed before completion");
+  return { sourceRoot, isolatedRoot, artifactRoot };
 }
 
 export async function syncResultToTrustedArtifact({ isolatedRoot, artifactRoot, baselineRecords = [] }) {
@@ -160,6 +176,8 @@ async function walkTree(root, prefix, records) {
 function enforceResultQuota(quota) { if (quota.files > MAX_BASELINE_UNTRACKED_FILES || quota.bytes > MAX_BASELINE_UNTRACKED_BYTES) throw new UnsupportedRepositoryShapeError(["agent result exceeds write artifact quota"]); }
 function sameTreeRecord(left, right) { return JSON.stringify(left ?? null) === JSON.stringify(right ?? null); }
 function portableRelative(root, path) { return relative(root, path).split(sep).join("/"); }
+function isContained(parent, child) { const path = relative(parent, child); return path === "" || (path !== ".." && !path.startsWith(".." + sep) && !isAbsolute(path)); }
+function writeResumeError(message) { return Object.assign(new Error(message), { errorKind: "write_resume_invalid" }); }
 async function hashFile(path) { const hash = createHash("sha256"); for await (const chunk of createReadStream(path)) hash.update(chunk); return hash.digest("hex"); }
 
 async function gitAttributeFilesWithFilters(root) {

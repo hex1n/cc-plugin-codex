@@ -49,6 +49,7 @@ export async function writeReviewGateCache(value) {
 const DEFAULT_RUNTIME_CONFIG = Object.freeze({
   task: Object.freeze({
     profile: "standard",
+    executionLeaseEnabled: false,
     model: null,
     effort: null,
     maxTurns: null,
@@ -82,6 +83,7 @@ export async function loadRuntimeConfig({ cwd = process.cwd(), env = process.env
   const environment = {
     task: {
       profile: emptyToNull(env.CLAUDE_COMPANION_TASK_PROFILE),
+      executionLeaseEnabled: env.CLAUDE_COMPANION_TASK_EXECUTION_LEASE == null || env.CLAUDE_COMPANION_TASK_EXECUTION_LEASE === "" ? null : booleanValue(env.CLAUDE_COMPANION_TASK_EXECUTION_LEASE, "CLAUDE_COMPANION_TASK_EXECUTION_LEASE"),
       model: emptyToNull(env.CLAUDE_COMPANION_MODEL),
       effort: emptyToNull(env.CLAUDE_COMPANION_EFFORT),
       maxTurns: numberOrNull(env.CLAUDE_COMPANION_MAX_TURNS),
@@ -125,7 +127,7 @@ async function readOptionalConfig(path) {
 
 function validateShape(value, path) {
   if (!plainObject(value)) throw new Error(`Configuration ${path} must be a JSON object`);
-  const allowed = { task: new Set(["profile", "model", "effort", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs", "profiles"]), review: new Set(["base", "model", "profile", "evidenceLeaseEnabled", "profiles"]), jobs: new Set(["backgroundTimeoutMs"]) };
+  const allowed = { task: new Set(["profile", "model", "effort", "executionLeaseEnabled", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs", "profiles"]), review: new Set(["base", "model", "profile", "evidenceLeaseEnabled", "profiles"]), jobs: new Set(["backgroundTimeoutMs"]) };
   for (const [section, fields] of Object.entries(value)) {
     if (!allowed[section]) throw new Error(`Unknown configuration section: ${section}`);
     if (!plainObject(fields)) throw new Error(`Configuration section ${section} must be an object`);
@@ -152,6 +154,7 @@ function mergeConfig(...layers) {
 function validateRuntimeConfig(config) {
   nullableString(config.task.model, "task.model");
   profileName(config.task.profile, "task.profile");
+  if (typeof config.task.executionLeaseEnabled !== "boolean") throw new Error("task.executionLeaseEnabled must be a boolean");
   nullableEnum(config.task.effort, EFFORT_LEVELS, "task.effort");
   positiveInteger(config.task.maxTurns, "task.maxTurns", true);
   positiveInteger(config.task.finalizeAtTurn, "task.finalizeAtTurn", true);

@@ -75,7 +75,7 @@ test("admin MCP probe performs only initialize and tool discovery", async () => 
   assert.equal(result.code, 0, result.stderr);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.probe.ok, true);
-  assert.equal(payload.probe.tool_count, 12);
+  assert.equal(payload.probe.tool_count, 13);
   for (const name of ["claude_adversarial_review", "claude_jobs_list", "claude_doctor"]) assert(payload.probe.tools.includes(name));
 });
 
