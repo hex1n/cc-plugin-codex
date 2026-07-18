@@ -17,9 +17,9 @@ task, transfer, status, result, and cancel.
 ## Typed MCP tools
 
 The only normal Codex integration is the local stdio MCP server declared by
-`.mcp.json`. Its twelve typed tools cover read-only tasks, code/plan/adversarial
-review, isolated write start, explicit apply/discard, explicit-ID job lifecycle,
-bounded job listing, and read-only setup diagnosis. The server imports stable
+`.mcp.json`. Its thirteen typed tools cover read-only tasks, code/plan/adversarial
+review, isolated write start, explicit checkpoint resume, explicit apply/discard,
+explicit-ID job lifecycle, bounded job listing, and read-only setup diagnosis. The server imports stable
 `#app/*` application contracts; it does not spawn a shell or a CLI adapter.
 Prompts are sent to Claude over stdin and never appear in its argv.
 
@@ -40,6 +40,19 @@ This project was inspired by
 Claude Code users invoke Codex for reviews and delegated tasks. This repository
 explores the reverse direction: Codex remains the orchestrator and delegates to
 the user's local Claude Code CLI.
+
+## Product model and Balsamiq-style prototype
+
+The low-fidelity product model is conversation-first: choose a Task or dedicated
+review intent, track the resulting Job, then make the state-gated decision to
+resume, cancel, apply, or discard. Jobs, Doctor, and Transfer remain supporting
+entry points instead of a plugin-owned dashboard.
+
+![cc-plugin-codex repository-wide Balsamiq-style wireframe](docs/prototypes/cc-plugin-codex-low-fidelity.svg)
+
+The storyboard maps all nine Skills and thirteen typed MCP tools onto that
+Intent → Job → Decision flow, including the isolated-write trust boundary. See the
+[prototype rationale](docs/prototypes/cc-plugin-codex-low-fidelity.md).
 
 ## Installation
 
@@ -74,6 +87,15 @@ Refresh the marketplace and reinstall the plugin, then restart Codex:
 /plugin marketplace update personal
 /plugin install cc-plugin-codex@personal
 ```
+
+For a local marketplace checkout, the equivalent manager command is:
+
+```sh
+codex plugin add cc-plugin-codex@personal --json
+```
+
+Reinstalling refreshes the versioned local cache. Restart Codex afterward so
+Skills and hooks are reloaded.
 
 The build metadata suffix in `.codex-plugin/plugin.json` is intentionally
 updated for local cache busting while the public release base remains aligned
@@ -110,11 +132,13 @@ report internally selected auxiliary models, which remain visible through
 `effective_models` and `model_usage`.
 
 `context=summary|diff|full` declares how much context is being sent; it does not
-silently transform the prompt. Explicit read-only continuation uses exactly one
-of `resume_session_id` or `continue_session`; a fresh task is the default and
-isolated writes never resume. Results and tracked jobs expose a compact
-disclosure summary. `finalize_at_turn` adds a soft instruction to synthesize
-before the hard turn limit is reached.
+silently transform the prompt. Legacy read-only continuation uses exactly one
+of `resume_session_id` or `continue_session`. A fresh task is the default.
+When Task Execution Lease is enabled, read-only and isolated-write checkpoints
+resume only through `claude_task_resume(job_id)`; writes reuse the verified
+original sandbox. Results and tracked jobs expose a compact disclosure summary.
+`finalize_at_turn` adds a soft instruction to synthesize before the hard turn
+limit is reached.
 
 Environment variables:
 

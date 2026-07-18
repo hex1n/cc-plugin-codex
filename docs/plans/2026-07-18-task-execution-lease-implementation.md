@@ -129,6 +129,19 @@ Rules:
   the exact checkpoint and cumulative chain.
 - No fallback transport, model, retry, resume, or budget expansion is added.
 
+## User-facing prototype
+
+The repository-wide information hierarchy is captured in
+`docs/prototypes/cc-plugin-codex-low-fidelity.md`. The recommended Balsamiq-style
+storyboard keeps the product inside the Codex conversation: select an Intent,
+track its Job, then expose one state-gated decision for checkpointed or
+awaiting-apply work.
+
+The prototype is not a production UI contract. Its state-to-action mapping is
+normative for documentation: checkpointed exposes explicit resume, resuming
+does not expose a second resume, and write apply appears only at
+`awaiting_apply`.
+
 ## TDD slices
 
 1. Read-only max-turn and max-budget results become checkpointed only with a

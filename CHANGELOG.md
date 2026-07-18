@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Added a repository-wide Balsamiq-style storyboard built around the
+  conversation-first Intent → Job → Decision flow, with explicit
+  state-to-action and trust-boundary mapping.
 - Added a default-off Task Execution Lease for read-only and isolated-write
   tasks, with durable checkpoints, one explicit typed resume operation,
   same-session/same-sandbox continuation, cumulative cost accounting, and

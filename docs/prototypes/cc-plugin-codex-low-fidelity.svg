@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1180" viewBox="0 0 1600 1180" role="img" aria-labelledby="title desc">
+  <title id="title">cc-plugin-codex conversation-first Balsamiq-style product storyboard</title>
+  <desc id="desc">A hand-drawn low-fidelity storyboard showing intent routing, a tracked job, explicit resume or apply decisions, supporting job and doctor entry points, and the plugin trust boundary.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f5f7fb; }
+      .paper { fill: #fff; stroke: #475569; stroke-width: 2.2; filter: url(#rough); }
+      .panel { fill: #fff; stroke: #64748b; stroke-width: 1.6; filter: url(#rough); }
+      .soft { fill: #eef2f7; stroke: #94a3b8; stroke-width: 1.4; filter: url(#rough); }
+      .focus { fill: #eff6ff; stroke: #3b82f6; stroke-width: 2.4; filter: url(#rough); }
+      .intent { fill: #eff6ff; stroke: #3b82f6; stroke-width: 2.4; filter: url(#rough); }
+      .checkpoint { fill: #fff7df; stroke: #d39b24; stroke-width: 2.4; filter: url(#rough); }
+      .checkpoint-pill { fill: #ffedb5; stroke: #d39b24; stroke-width: 1.4; filter: url(#rough); }
+      .decision { fill: #f5f0ff; stroke: #7c3aed; stroke-width: 2.4; filter: url(#rough); }
+      .write { fill: #ecfdf3; stroke: #2f855a; stroke-width: 2.4; filter: url(#rough); }
+      .review { fill: #f7f2ff; stroke: #8b5cf6; stroke-width: 1.5; stroke-dasharray: 7 5; filter: url(#rough); }
+      .skill { fill: #eef2ff; stroke: #6366f1; stroke-width: 1.5; stroke-dasharray: 7 5; filter: url(#rough); }
+      .mcp { fill: #e6f6ff; stroke: #0284c7; stroke-width: 1.5; filter: url(#rough); }
+      .service { fill: #f5f0ff; stroke: #7c3aed; stroke-width: 1.5; filter: url(#rough); }
+      .claude { fill: #fff1e8; stroke: #d97706; stroke-width: 1.5; filter: url(#rough); }
+      .lease { fill: #ecfeff; stroke: #0f8b8d; stroke-width: 1.5; stroke-dasharray: 7 5; filter: url(#rough); }
+      .dark { fill: #2563eb; stroke: #1d4ed8; stroke-width: 1.5; filter: url(#rough); }
+      .dashed { fill: #fff; stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 7 5; filter: url(#rough); }
+      .line { fill: none; stroke: #555; stroke-width: 1.8; }
+      .dashline { fill: none; stroke: #777; stroke-width: 1.4; stroke-dasharray: 6 5; }
+      .title { font: 700 28px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #111; }
+      .subtitle { font: 400 14px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #555; }
+      .h1 { font: 700 19px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #171717; }
+      .h2 { font: 700 15px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #222; }
+      .body { font: 400 13px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #333; }
+      .small { font: 400 11.5px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #555; }
+      .tiny { font: 400 10px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #555; }
+      .nav { font: 650 13px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #333; }
+      .mono { font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #333; }
+      .button { fill: #fff; stroke: #333; stroke-width: 1.5; filter: url(#rough); }
+      .button-dark { fill: #2563eb; stroke: #1d4ed8; stroke-width: 1.5; filter: url(#rough); }
+      .button-green { fill: #2f855a; stroke: #276749; stroke-width: 1.5; filter: url(#rough); }
+      .button-text { font: 650 11.5px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #222; text-anchor: middle; }
+      .button-text-light { font: 650 11.5px 'Chalkboard SE', 'Comic Sans MS', 'Marker Felt', sans-serif; fill: #fff; text-anchor: middle; }
+      .center { text-anchor: middle; }
+    </style>
+    <filter id="rough" x="-4%" y="-4%" width="108%" height="108%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.017" numOctaves="2" seed="31" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="0.9" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1600" height="1180"/>
+  <text class="title" x="32" y="42">cc-plugin-codex — 对话优先的产品故事板</text>
+  <text class="subtitle" x="32" y="68">Balsamiq-style · 发起 Intent → 跟踪 Job → 显式决策 Resume / Apply / Discard / Cancel</text>
+
+  <rect class="paper" x="28" y="88" width="1544" height="820" rx="14"/>
+  <rect class="soft" x="28" y="88" width="1544" height="42" rx="14"/>
+  <circle cx="50" cy="109" r="5" fill="#777"/>
+  <circle cx="68" cy="109" r="5" fill="#999"/>
+  <circle cx="86" cy="109" r="5" fill="#bbb"/>
+  <text class="h2" x="108" y="115">Codex · cc-plugin-codex repository task</text>
+  <text class="small" x="1536" y="114" text-anchor="end">host-owned conversation surface</text>
+
+  <rect class="soft" x="48" y="148" width="202" height="736" rx="10"/>
+  <text class="h2" x="68" y="178">当前 Task</text>
+  <rect class="intent" x="60" y="194" width="178" height="54" rx="8"/>
+  <text class="nav" x="76" y="217">↳ Delegate to Claude</text>
+  <text class="small" x="76" y="237">job_7f2 · checkpointed</text>
+  <text class="small" x="68" y="280">辅助入口 / Utilities</text>
+  <text class="nav" x="76" y="310">◴ Jobs</text>
+  <text class="small" x="96" y="329">status · result · cancel</text>
+  <text class="nav" x="76" y="366">✓ Doctor</text>
+  <text class="small" x="96" y="385">readiness only</text>
+  <text class="nav" x="76" y="422">⇥ Transfer</text>
+  <text class="small" x="96" y="441">local summary seed</text>
+  <line x1="68" y1="470" x2="230" y2="470" stroke="#aaa"/>
+  <text class="small" x="68" y="498">不是独立控制台</text>
+  <text class="body" x="68" y="522">插件行为出现在当前</text>
+  <text class="body" x="68" y="544">Codex 对话和结果卡片中。</text>
+  <rect class="skill" x="64" y="580" width="170" height="132" rx="8"/>
+  <text class="h2" x="78" y="608">意图由 Skills 路由</text>
+  <text class="small" x="78" y="634">Task</text>
+  <text class="small" x="78" y="656">Review changes</text>
+  <text class="small" x="78" y="678">Review plan</text>
+  <text class="small" x="78" y="700">Adversarial review</text>
+  <text class="tiny" x="68" y="852">9 Skills route conversation intents</text>
+
+  <text class="h1" x="280" y="170">1 · 发起 / Intent</text>
+  <rect class="panel" x="280" y="190" width="798" height="72" rx="14"/>
+  <text class="small" x="300" y="214">YOU</text>
+  <text class="body" x="300" y="239">检查 Task Execution Lease 的失败路径；保留证据，在达到边界时不要自动重试。</text>
+
+  <rect class="intent" x="280" y="280" width="798" height="182" rx="10"/>
+  <text class="h2" x="300" y="309">Intent route / 意图路由</text>
+  <rect class="dark" x="300" y="326" width="106" height="31" rx="6"/>
+  <text class="button-text-light" x="353" y="346">Task</text>
+  <rect class="button" x="414" y="326" width="132" height="31" rx="6"/>
+  <text class="button-text" x="480" y="346">Review changes</text>
+  <rect class="button" x="554" y="326" width="116" height="31" rx="6"/>
+  <text class="button-text" x="612" y="346">Review plan</text>
+  <rect class="button" x="678" y="326" width="144" height="31" rx="6"/>
+  <text class="button-text" x="750" y="346">Adversarial</text>
+  <text class="small" x="300" y="388">Capability</text>
+  <text class="body" x="380" y="388">● Read-only　 ○ Isolated write</text>
+  <text class="small" x="300" y="416">Runtime envelope</text>
+  <rect class="soft" x="420" y="398" width="438" height="30" rx="6"/>
+  <text class="mono" x="436" y="418">standard · sonnet · effort medium · 8 turns · $1.50 · 300s</text>
+  <text class="tiny" x="300" y="446">明确选择；不会自动换模型、扩预算、重试或恢复。</text>
+  <rect class="button-dark" x="910" y="407" width="142" height="36" rx="6"/>
+  <text class="button-text-light" x="981" y="430">Start typed task</text>
+
+  <text class="h1" x="280" y="505">2 · 跟踪 / Job</text>
+  <rect class="checkpoint" x="280" y="526" width="798" height="188" rx="10"/>
+  <text class="h2" x="300" y="554">Checkpoint saved · job_7f2</text>
+  <rect class="checkpoint-pill" x="873" y="538" width="179" height="28" rx="14"/>
+  <text class="small center" x="962" y="557">checkpointed · safe stop</text>
+  <text class="body" x="300" y="587">达到配置边界；已保留可继续的进度，没有发起第二次调用。</text>
+  <rect class="panel" x="300" y="603" width="234" height="70" rx="7"/>
+  <text class="small" x="316" y="625">Completed</text>
+  <text class="body" x="316" y="648">✓ 定位调用方　✓ 验证状态机</text>
+  <rect class="panel" x="548" y="603" width="230" height="70" rx="7"/>
+  <text class="small" x="564" y="625">Remaining</text>
+  <text class="body" x="564" y="648">○ 失败路径　○ 聚焦测试</text>
+  <rect class="panel" x="792" y="603" width="260" height="70" rx="7"/>
+  <text class="small" x="808" y="625">Usage</text>
+  <text class="mono" x="808" y="648">8 turns · $0.42 · same session</text>
+  <text class="tiny" x="300" y="698">Job 是持久状态，不是隐式“最近一次”；status/result/cancel 都要求明确 job ID。</text>
+
+  <text class="h1" x="280" y="758">3 · 决策 / Explicit action</text>
+  <rect class="decision" x="280" y="778" width="798" height="94" rx="10"/>
+  <text class="h2" x="300" y="807">现在需要你的授权</text>
+  <text class="body" x="300" y="832">继续同一 session / sandbox，或保留 checkpoint。</text>
+  <text class="tiny" x="300" y="852">未授权时不自动开启下一轮。</text>
+  <rect class="button-dark" x="760" y="817" width="128" height="36" rx="6"/>
+  <text class="button-text-light" x="824" y="840">Resume</text>
+  <rect class="button" x="900" y="817" width="128" height="36" rx="6"/>
+  <text class="button-text" x="964" y="840">Leave saved</text>
+
+  <rect class="soft" x="1100" y="148" width="450" height="736" rx="10"/>
+  <text class="h1" x="1122" y="180">Job details / 审计抽屉</text>
+  <rect class="panel" x="1120" y="198" width="410" height="146" rx="8"/>
+  <text class="h2" x="1140" y="226">Chain</text>
+  <circle cx="1150" cy="254" r="7" fill="#555"/>
+  <line class="line" x1="1150" y1="261" x2="1150" y2="306"/>
+  <circle cx="1150" cy="314" r="7" fill="#fff" stroke="#555" stroke-width="2"/>
+  <text class="body" x="1170" y="258">job_7f2 · checkpointed · parent</text>
+  <text class="small" x="1170" y="280">Sonnet · medium · $0.42 · session bound</text>
+  <text class="body" x="1170" y="318">child appears only after explicit Resume</text>
+  <text class="tiny" x="1140" y="336">one active child · cumulative usage across chain</text>
+
+  <rect class="panel" x="1120" y="362" width="410" height="108" rx="8"/>
+  <text class="h2" x="1140" y="390">Actions are state-gated</text>
+  <rect class="button" x="1140" y="408" width="104" height="34" rx="6"/>
+  <text class="button-text" x="1192" y="430">View result</text>
+  <rect class="button" x="1254" y="408" width="104" height="34" rx="6"/>
+  <text class="button-text" x="1306" y="430">Resume</text>
+  <rect class="button" x="1368" y="408" width="104" height="34" rx="6"/>
+  <text class="button-text" x="1420" y="430">Cancel*</text>
+  <text class="tiny" x="1140" y="459">* Cancel appears only while a worker is active.</text>
+
+  <rect class="write" x="1120" y="490" width="410" height="206" rx="8"/>
+  <text class="h2" x="1140" y="518">Write result · awaiting_apply</text>
+  <text class="small" x="1140" y="542">For isolated-write Tasks only</text>
+  <text class="body" x="1140" y="572">✓ sandbox identity verified</text>
+  <text class="body" x="1140" y="596">✓ completion receipt verified</text>
+  <text class="body" x="1140" y="620">✓ frozen artifact · 2 changed paths</text>
+  <text class="mono" x="1140" y="646">patch hash 9d2… · source untouched</text>
+  <rect class="button-green" x="1140" y="658" width="112" height="30" rx="6"/>
+  <text class="button-text-light" x="1196" y="678">Apply</text>
+  <rect class="button" x="1264" y="658" width="112" height="30" rx="6"/>
+  <text class="button-text" x="1320" y="678">Discard</text>
+  <text class="tiny" x="1390" y="678">drift → fail closed</text>
+
+  <rect class="review" x="1120" y="716" width="410" height="138" rx="8"/>
+  <text class="h2" x="1140" y="744">Review result uses a different route</text>
+  <text class="body" x="1140" y="770">Findings → severity + file/line</text>
+  <text class="body" x="1140" y="794">Coverage → files + evidence completeness</text>
+  <text class="body" x="1140" y="818">Usage → model + effort + turns + cost</text>
+  <text class="tiny" x="1140" y="842">Review never becomes a generic Task or a write action.</text>
+
+  <text class="h1" x="32" y="956">实现与可信边界 / What the repository actually owns</text>
+  <rect class="paper" x="28" y="974" width="1544" height="174" rx="12"/>
+  <rect class="skill" x="52" y="1000" width="190" height="58" rx="8"/>
+  <text class="h2 center" x="147" y="1025">9 Skills</text>
+  <text class="small center" x="147" y="1045">intent + user contract</text>
+  <path class="line" d="M242 1029 H300" marker-end="url(#arrow)"/>
+  <rect class="mcp" x="304" y="1000" width="210" height="58" rx="8"/>
+  <text class="h2 center" x="409" y="1025">13 typed MCP tools</text>
+  <text class="small center" x="409" y="1045">normal transport · prompt via stdin</text>
+  <path class="line" d="M514 1029 H572" marker-end="url(#arrow)"/>
+  <rect class="service" x="576" y="1000" width="238" height="58" rx="8"/>
+  <text class="h2 center" x="695" y="1025">Application service + Job state</text>
+  <text class="small center" x="695" y="1045">validation · lifecycle · receipts</text>
+  <path class="line" d="M814 1029 H872" marker-end="url(#arrow)"/>
+  <rect class="claude" x="876" y="1000" width="216" height="58" rx="8"/>
+  <text class="h2 center" x="984" y="1025">Local Claude Code</text>
+  <text class="small center" x="984" y="1045">read-only or isolated clone</text>
+
+  <rect class="lease" x="1120" y="992" width="426" height="72" rx="8"/>
+  <text class="h2" x="1140" y="1018">Optional job-local MCP leases · default off</text>
+  <text class="small" x="1140" y="1040">Review: 3 bounded read-only evidence tools</text>
+  <text class="small" x="1140" y="1058">Task: checkpoint + complete receipts only</text>
+
+  <path class="dashline" d="M147 1058 V1094 H1546"/>
+  <text class="tiny" x="52" y="1118">✓ no shell/CLI normal transport</text>
+  <text class="tiny" x="300" y="1118">✓ no auto retry / resume / fallback / budget expansion</text>
+  <text class="tiny" x="720" y="1118">✓ source untouched until explicit apply</text>
+  <text class="tiny" x="1038" y="1118">✓ admin + hooks = diagnosis / recovery only</text>
+  <text class="tiny" x="52" y="1138">Conceptual presentation contract: Codex owns the host UI; this repository owns Skills, typed operations, state transitions, evidence, and safety decisions.</text>
+</svg>
