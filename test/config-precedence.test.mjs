@@ -63,6 +63,8 @@ test("review profiles cannot exceed absolute safety ceilings", async () => {
   await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /must not exceed 40/);
   await writeJson(join(cwd, ".codex", "cc-plugin-codex.json"), { review: { profiles: { gate: { maxBudgetUsd: 0.6 } } } });
   await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /Stop gate safety ceiling/);
+  await writeJson(join(cwd, ".codex", "cc-plugin-codex.json"), { review: { profiles: { deep: { evidenceUnits: 21, evidenceMaxTurns: 40 } } } });
+  await assert.rejects(() => loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} }), /evidenceUnits.*must not exceed 20/);
 });
 
 test("review gate environment override is explicit and validated", async () => {
@@ -80,4 +82,27 @@ test("review gate environment override is explicit and validated", async () => {
     if (previous === undefined) delete process.env.CLAUDE_COMPANION_REVIEW_GATE;
     else process.env.CLAUDE_COMPANION_REVIEW_GATE = previous;
   }
+});
+
+test("review Evidence Lease is default-off with profile-owned units and can be enabled explicitly", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-evidence-config-"));
+  const cwd = join(root, "repo");
+  await mkdir(cwd, { recursive: true });
+  const defaults = await loadRuntimeConfig({ cwd, home: join(root, "home"), env: {} });
+  assert.equal(defaults.review.evidenceLeaseEnabled, false);
+  assert.deepEqual(Object.fromEntries(["quick", "standard", "deep"].map(name => [name, {
+    units: defaults.review.profiles[name].evidenceUnits,
+    turns: defaults.review.profiles[name].evidenceMaxTurns,
+  }])), {
+    quick: { units: 3, turns: 7 },
+    standard: { units: 5, turns: 9 },
+    deep: { units: 8, turns: 12 },
+  });
+
+  const enabled = await loadRuntimeConfig({ cwd, home: join(root, "home"), env: { CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE: "on" } });
+  assert.equal(enabled.review.evidenceLeaseEnabled, true);
+  await assert.rejects(
+    () => loadRuntimeConfig({ cwd, home: join(root, "home"), env: { CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE: "sometimes" } }),
+    /must be one of/,
+  );
 });

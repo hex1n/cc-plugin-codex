@@ -1,4 +1,5 @@
 import { appendFile, chmod } from "node:fs/promises";
+import { REVIEW_EVIDENCE_SERVER_KEY, REVIEW_EXPECTED_INIT_TOOLS } from "./review-evidence-contract.mjs";
 
 /**
  * Incrementally parse Claude's newline-delimited stream-json output.
@@ -50,6 +51,32 @@ export function parseStreamJson(text, options = {}) {
   parser.end();
 }
 
+export function createReviewInitValidator() {
+  let ready = false;
+  return {
+    observe(event) {
+      if (event?.type !== "system" || event.subtype !== "init") return false;
+      const serversValue = event.mcp_servers ?? event.mcpServers ?? [];
+      const servers = Array.isArray(serversValue)
+        ? serversValue
+        : Object.entries(serversValue).map(([name, value]) => ({ name, ...(typeof value === "object" ? value : { status: value }) }));
+      const server = servers.find(value => (value.name ?? value.server) === REVIEW_EVIDENCE_SERVER_KEY);
+      if (!server || server.status !== "connected") throw mcpStartupError("Required review evidence MCP server is not connected");
+      const actual = (event.tools ?? []).map(value => typeof value === "string" ? value : value?.name).filter(Boolean);
+      const expected = [...REVIEW_EXPECTED_INIT_TOOLS];
+      if (actual.length !== new Set(actual).size || !sameSet(actual, expected)) {
+        throw mcpStartupError(`Claude init tool set does not exactly match the review evidence contract (expected ${expected.join(", ")})`);
+      }
+      ready = true;
+      return true;
+    },
+    assertReady() {
+      if (!ready) throw mcpStartupError("Claude returned no valid review evidence MCP init event");
+      return true;
+    },
+  };
+}
+
 export function progressForStreamEvent(event) {
   if (event?.type === "system" && event.subtype === "api_retry") return { phase: "retrying", progressMessage: `API retry ${event.attempt ?? ""}`.trim() };
   if (event?.type === "retry") return { phase: "retrying", progressMessage: `API retry ${event.attempt ?? ""}`.trim() };
@@ -71,8 +98,8 @@ export function errorForStreamResult(event) {
   const subtype = event.subtype ?? "unknown";
   const modelUsage = event.modelUsage ?? event.model_usage;
   const common = { upstreamErrorSubtype: subtype, ...(event.session_id ? { sessionId: event.session_id } : {}), ...present("usage", event.usage), ...present("modelUsage", modelUsage), ...present("effectiveModels", modelUsage && typeof modelUsage === "object" ? Object.keys(modelUsage) : null), ...present("totalCostUsd", event.total_cost_usd ?? event.totalCostUsd), ...present("numTurns", event.num_turns ?? event.numTurns), ...present("durationMs", event.duration_ms ?? event.durationMs), ...present("durationApiMs", event.duration_api_ms ?? event.durationApiMs) };
-  if (subtype === "error_max_turns") return { errorKind: "max_turns", ...common, error: "Claude reached the configured turn limit before producing a final result", suggestedAction: "resume_or_increase_turns" };
-  if (subtype === "error_max_budget_usd") return { errorKind: "max_budget", ...common, error: "Claude reached the configured budget before producing a final result", suggestedAction: "increase_budget_or_reduce_scope" };
+  if (subtype === "error_max_turns") return { errorKind: "max_turns", ...common, error: "Claude reached the configured turn limit before producing a final result", suggestedAction: "resume_or_increase_turns", costBudgetExhausted: false, turnLimitReached: true };
+  if (subtype === "error_max_budget_usd") return { errorKind: "max_budget", ...common, error: "Claude reached the configured budget before producing a final result", suggestedAction: "increase_budget_or_reduce_scope", costBudgetExhausted: true, turnLimitReached: false };
   if (subtype === "error_during_execution") return { errorKind: "claude_execution", ...common, error: "Claude reported an execution error", suggestedAction: "inspect_stderr_or_resume" };
   return { errorKind: "claude_result", ...common, error: `Claude returned an error result (${subtype})`, suggestedAction: "inspect_stderr_or_resume" };
 }
@@ -96,3 +123,11 @@ function toolResultUses(event) {
   return content.filter(part => part?.type === "tool_result" || part?.type === "tool_output");
 }
 function present(key, value) { return value == null ? {} : { [key]: value }; }
+
+function sameSet(left, right) {
+  return left.length === right.length && left.every(value => right.includes(value));
+}
+
+function mcpStartupError(message) {
+  return Object.assign(new Error(message), { errorKind: "mcp_startup", suggestedAction: "inspect_review_evidence_runtime" });
+}

@@ -5,6 +5,9 @@ import { createJob, jobArtifacts, saveJob, writeJobRequest } from "./state.mjs";
 import { terminateProcessTree } from "./process.mjs";
 import { spawnDetachedSilent } from "./process.mjs";
 import { fileURLToPath } from "node:url";
+import { REVIEW_EVIDENCE_QUALIFIED_TOOLS } from "./review-evidence-contract.mjs";
+import { createReviewInitValidator, createStreamJsonParser } from "./claude-stream.mjs";
+import { cleanupReviewEvidenceRuntime, readReviewEvidenceState } from "./review-evidence-runtime.mjs";
 // Flags/JSON verified 2026-07-11 against Claude Code 2.1.207.
 export const REVIEW_DIFF_ADAPTER = fileURLToPath(new URL("../review-diff.mjs", import.meta.url));
 export const CLAUDE_CLI = Object.freeze({ executable: process.env.CLAUDE_CODE_EXECUTABLE ?? "claude", baseArgs: ["--print", "--output-format", "json"], profiles: Object.freeze({ review: ["--safe-mode", "--permission-mode", "plan", "--allowedTools", `Read,Grep,Glob,Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(node ${REVIEW_DIFF_ADAPTER}:*)`], task: ["--permission-mode", "plan"] }) });
@@ -42,19 +45,34 @@ export function parseClaudeJson(stdout, { schemaPath = null } = {}) {
   }
   return parsed;
 }
-export function buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false, settingsPath = null, settingSources = null, claudeExecutable = CLAUDE_CLI.executable } = {}) {
+export function buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, stream = false, settingsPath = null, settingSources = null, reviewEvidence = null, claudeExecutable = CLAUDE_CLI.executable } = {}) {
   if (!CLAUDE_CLI.profiles[profile]) throw new Error(`Unknown Claude capability profile: ${profile}`);
-  const profileArgs = profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile];
+  if (reviewEvidence && profile !== "review") throw new Error("Review Evidence Lease is only valid for the review profile");
+  if (reviewEvidence && (settingsPath || settingSources !== null)) throw new Error("Review Evidence Lease uses a fixed settings contract");
+  const profileArgs = reviewEvidence ? [
+    "--setting-sources", "",
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+    "--mcp-config", reviewEvidence.mcpConfigPath,
+    "--tools", "",
+    "--allowedTools", REVIEW_EVIDENCE_QUALIFIED_TOOLS.join(","),
+    "--permission-mode", "dontAsk",
+  ] : profile === "task" && write ? ["--permission-mode", "acceptEdits"] : CLAUDE_CLI.profiles[profile];
   const session = resume ? ["--resume", resume] : continueSession ? ["--continue"] : [];
   const runtime = [...(model ? ["--model", model] : []), ...(effort ? ["--effort", effort] : []), ...(maxTurns ? ["--max-turns", String(maxTurns)] : []), ...(maxBudgetUsd ? ["--max-budget-usd", String(maxBudgetUsd)] : [])];
   const schema = schemaPath ? ["--json-schema", schemaForClaudeCli(schemaPath)] : [];
   const settings = [...(settingSources !== null ? ["--setting-sources", settingSources] : []), ...(settingsPath ? ["--settings", settingsPath] : [])];
-  const baseArgs = stream ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
+  const baseArgs = stream || reviewEvidence ? ["--print", "--output-format", "stream-json", "--verbose"] : CLAUDE_CLI.baseArgs;
   return { command: claudeExecutable, args: [...baseArgs, ...profileArgs, ...session, ...runtime, ...schema, ...settings], stdin: prompt };
 }
-export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath }) {
-  const invocation = buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath });
-  const result = await runCommand(invocation.command, invocation.args, { cwd, timeoutMs, stdin: invocation.stdin });
+export async function runClaude({ profile, prompt, cwd, executionCwd = cwd, timeoutMs, resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence = null, leaseStatePath = null }) {
+  const invocation = buildClaudeInvocation(profile, prompt, { resume, continueSession, write, model, effort, maxTurns, maxBudgetUsd, schemaPath, reviewEvidence });
+  const initValidator = reviewEvidence ? createReviewInitValidator() : null;
+  let malformedStream = false;
+  const parser = reviewEvidence ? createStreamJsonParser({ onEvent: event => initValidator.observe(event), onMalformed: () => { malformedStream = true; } }) : null;
+  const result = await runCommand(invocation.command, invocation.args, { cwd: executionCwd, timeoutMs, stdin: invocation.stdin, ...(parser ? { onStdoutChunk: chunk => parser.push(chunk) } : {}) });
+  parser?.end();
+  if (result.inspectionError) throw reviewStartupError(result.inspectionError, result, model);
   if (result.timedOut) throw new Error(`Claude timed out after ${timeoutMs}ms`);
   if (result.code !== 0) {
     try { parseClaudeJson(result.stdout); }
@@ -63,19 +81,61 @@ export async function runClaude({ profile, prompt, cwd, timeoutMs, resume, conti
     }
     throw new ClaudeInvocationError(result.stderr.trim() || `Claude exited with code ${result.code}`, { errorKind: "nonzero_exit", exitCode: result.code, signal: result.signal ?? null, requestedModel: model ?? null });
   }
-  try { return { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid }; }
+  try {
+    if (reviewEvidence) {
+      if (malformedStream) throw reviewStartupError(new Error("Claude returned malformed stream-json during MCP startup"), result, model);
+      try { initValidator.assertReady(); }
+      catch (error) { throw reviewStartupError(error, result, model); }
+    }
+    const parsed = { ...parseClaudeJson(result.stdout, { schemaPath }), pid: result.pid };
+    if (!reviewEvidence) return parsed;
+    const state = await readReviewEvidenceState(leaseStatePath, { expectedParentPid: result.pid });
+    return {
+      ...parsed,
+      evidenceLease: evidenceLeaseFromState(state),
+      evidenceLeaseExhausted: state.exhausted,
+      costBudgetExhausted: false,
+      turnLimitReached: false,
+    };
+  }
   catch (error) {
     if (error instanceof ClaudeInvocationError) error.requestedModel ??= model ?? null;
     throw error;
   }
 }
-export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null, settingsPath = null, settingSources = null, claudeExecutable = CLAUDE_CLI.executable, finalizeWrite = false, metadata = {} }) {
+
+function reviewStartupError(error, result, model) {
+  return new ClaudeInvocationError(error.message, {
+    errorKind: "mcp_startup",
+    suggestedAction: error.suggestedAction ?? "inspect_review_evidence_runtime",
+    exitCode: result.code,
+    signal: result.signal ?? null,
+    requestedModel: model ?? null,
+  });
+}
+
+function evidenceLeaseFromState(state) {
+  return {
+    revision: state.revision,
+    phase: state.phase,
+    limitUnits: state.limitUnits,
+    usedUnits: state.usedUnits,
+    remainingUnits: state.remainingUnits,
+    exhausted: state.exhausted,
+    allowedCalls: state.allowedCalls,
+    deniedCalls: state.deniedCalls,
+    bytesReturned: state.bytesReturned,
+    filesExamined: state.filesExamined,
+    filesSkipped: state.filesSkipped,
+  };
+}
+export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd, resume, continueSession, write, model, effort, maxTurns, finalizeAtTurn, maxBudgetUsd, timeoutMs: requestedTimeoutMs, schemaPath, promptMeta, backgroundTimeoutMs, purpose = "user", disclosure = null, taskProfile = null, reviewProfile = null, settingsPath = null, settingSources = null, reviewEvidence = null, leaseStatePath = null, reviewControlRoot = null, claudeExecutable = CLAUDE_CLI.executable, finalizeWrite = false, metadata = {} }) {
   const job = await createJob({ cwd, profile, resumeSessionId: resume ?? null, promptMeta, write, model, effort, purpose, disclosure, taskProfile, reviewProfile, maxTurns, finalizeAtTurn, maxBudgetUsd, metadata });
   let workerPid = null;
   try {
     const requested = positiveTimeout(requestedTimeoutMs, null), background = positiveTimeout(backgroundTimeoutMs ?? process.env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS, null);
     const timeoutMs = requested && background ? Math.min(requested, background) : requested ?? background ?? 3_600_000;
-    await writeJobRequest(job, { profile, prompt, executionCwd, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, settingsPath, settingSources, claudeExecutable, finalizeWrite, stream: true });
+    await writeJobRequest(job, { profile, prompt, executionCwd, resume: resume ?? null, continueSession: Boolean(continueSession), write: Boolean(write), model: model ?? null, effort: effort ?? null, maxTurns: maxTurns ?? null, maxBudgetUsd: maxBudgetUsd ?? null, schemaPath: schemaPath ?? null, settingsPath, settingSources, reviewEvidence, leaseStatePath, reviewControlRoot, claudeExecutable, finalizeWrite, stream: true });
     const worker = fileURLToPath(new URL("../claude-job-worker.mjs", import.meta.url));
     ({ pid: workerPid } = await spawnDetachedSilent(process.execPath, [worker, cwd, job.id], { cwd, env: process.env }));
     const running = await saveJob({ ...job, pid: workerPid, workerPid, status: "running", timeoutMs, deadlineAt: new Date(Date.now() + timeoutMs).toISOString(), startedAt: new Date().toISOString() });
@@ -84,6 +144,7 @@ export async function startClaudeJob({ profile, prompt, cwd, executionCwd = cwd,
     return running;
   } catch (error) {
     if (workerPid) await terminateProcessTree(workerPid);
+    if (reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: reviewControlRoot }).catch(() => {});
     await saveJob({ ...job, pid: workerPid, workerPid, status: "failed", error: error.message, finishedAt: new Date().toISOString() });
     throw error;
   }
@@ -114,7 +175,9 @@ function claudePayloadError(payload, parsed) {
     totalCostUsd: parsed.totalCostUsd,
     numTurns: parsed.numTurns,
     durationMs: parsed.durationMs,
-    durationApiMs: parsed.durationApiMs
+    durationApiMs: parsed.durationApiMs,
+    costBudgetExhausted: mapping.errorKind === "max_budget",
+    turnLimitReached: mapping.errorKind === "max_turns"
   });
 }
 

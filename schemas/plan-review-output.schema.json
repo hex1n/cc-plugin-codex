@@ -39,6 +39,9 @@
     },
     "uncertainty": { "type": "string", "enum": ["low", "medium", "high"] },
     "budget_exhausted": { "type": "boolean" },
+    "evidence_lease_exhausted": { "type": "boolean" },
+    "cost_budget_exhausted": { "type": "boolean" },
+    "turn_limit_reached": { "type": "boolean" },
     "recommended_followup": {
       "type": "object", "additionalProperties": false, "required": ["profile", "focus", "reason"],
       "properties": {

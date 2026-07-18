@@ -12,6 +12,7 @@ import { rm } from "node:fs/promises";
 import { createIsolatedWriteWorkspace, removeIsolatedWriteWorkspace, WRITE_WORKSPACE_ROOT } from "./write-workspace.mjs";
 import { createWriteSandboxSettings, writeSandboxPreflight } from "./sandbox-policy.mjs";
 import { applyWriteArtifact, discardWriteArtifact } from "./patch-artifact.mjs";
+import { cleanupReviewEvidenceRuntime, prepareReviewEvidenceRuntime } from "./review-evidence-runtime.mjs";
 
 const ACTIVE = new Set(["starting", "running", "queued"]);
 
@@ -32,27 +33,27 @@ export async function reviewChanges(request) {
   const workspace = await findWorkspaceRoot(request.workspaceRoot), options = reviewOptions(request), runtimeConfig = await loadRuntimeConfig({ cwd: workspace });
   applyReviewRuntime(options, runtimeConfig.review);
   const context = await collectReviewContext({ cwd: workspace, base: options.base });
-  const rendered = await renderPrompt("review", { TARGET_LABEL: context.range, REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${context.root}\n${context.diff}` });
+  const rendered = await renderPrompt("review", { TARGET_LABEL: context.range, REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context, options), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: reviewInput(context, options) });
   const metadata = { operation: "review", reviewKind: "code", subjectKind: "changes", subjectLabel: context.range, subjectFingerprint: context.fingerprint, transport: request.transport ?? null, capability: "read-only" };
-  return executeOperation({ profile: "review", renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata });
+  return executeReviewOperation({ renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata, base: context.adapterBase });
 }
 
 export async function reviewChangesAdversarial(request) {
   const workspace = await findWorkspaceRoot(request.workspaceRoot), options = reviewOptions(request), runtimeConfig = await loadRuntimeConfig({ cwd: workspace });
   applyReviewRuntime(options, runtimeConfig.review);
   const context = await collectReviewContext({ cwd: workspace, base: options.base });
-  const rendered = await renderPrompt("adversarial-review", { TARGET_LABEL: context.range, USER_FOCUS: request.focus?.trim() || "none", REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: `Repository: ${context.root}\n${context.diff}` });
+  const rendered = await renderPrompt("adversarial-review", { TARGET_LABEL: context.range, USER_FOCUS: request.focus?.trim() || "none", REVIEW_COLLECTION_GUIDANCE: reviewCollectionGuidance(context, options), REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), REVIEW_INPUT: reviewInput(context, options) });
   const metadata = { operation: "review", reviewKind: "adversarial", subjectKind: "changes", subjectLabel: context.range, subjectFingerprint: context.fingerprint, transport: request.transport ?? null, capability: "read-only" };
-  return executeOperation({ profile: "review", renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata });
+  return executeReviewOperation({ renderedPrompt: rendered, cwd: context.root, options, outputSchema: schemaPath("review-output"), jobMetadata: metadata, base: context.adapterBase });
 }
 
 export async function reviewPlan(request) {
   const workspace = await findWorkspaceRoot(request.workspaceRoot), options = reviewOptions(request), runtimeConfig = await loadRuntimeConfig({ cwd: workspace });
   applyReviewRuntime(options, runtimeConfig.review, { applyBase: false });
   const target = await collectPlanReviewTarget({ cwd: workspace, targetFile: request.targetFile });
-  const metadata = { operation: "review", reviewKind: "plan", subjectKind: "file", subjectLabel: target.label, subjectFingerprint: target.fingerprint };
+  const metadata = { operation: "review", reviewKind: "plan", subjectKind: "file", subjectLabel: target.label, subjectFingerprint: target.fingerprint, transport: request.transport ?? null, capability: "read-only" };
   const rendered = await renderPrompt("plan-review", { SUBJECT_LABEL: target.label, SUBJECT_FINGERPRINT: target.fingerprint, REVIEW_BUDGET_GUIDANCE: reviewBudgetGuidance(options), PLAN_CONTENT: target.content });
-  const outcome = await executeOperation({ profile: "review", renderedPrompt: rendered, cwd: target.root, options, outputSchema: schemaPath("plan-review-output"), jobMetadata: metadata });
+  const outcome = await executeReviewOperation({ renderedPrompt: rendered, cwd: target.root, options, outputSchema: schemaPath("plan-review-output"), jobMetadata: metadata, base: "HEAD" });
   return outcome;
 }
 
@@ -100,9 +101,38 @@ export async function executeOperation({ profile, renderedPrompt, cwd, options, 
     return { kind: "job", job, options, metadata: jobMetadata };
   }
   let result;
-  try { result = await runClaude({ profile, prompt, cwd, ...runtime, schemaPath: outputSchema }); }
+  try { result = await runClaude({ profile, prompt, cwd, ...runtime, ...execution, schemaPath: outputSchema }); }
   catch (error) { Object.assign(error, { operation: jobMetadata.operation ?? null, reviewKind: jobMetadata.reviewKind ?? null, subjectKind: jobMetadata.subjectKind ?? null, subjectLabel: jobMetadata.subjectLabel ?? null, subjectFingerprint: jobMetadata.subjectFingerprint ?? null }); throw error; }
   return { kind: "result", result, options, metadata: jobMetadata };
+}
+
+async function executeReviewOperation({ renderedPrompt, cwd, options, outputSchema, jobMetadata, base }) {
+  if (!options.evidenceLeaseEnabled) return executeOperation({ profile: "review", renderedPrompt, cwd, options, outputSchema, jobMetadata });
+  const evidenceRuntime = await prepareReviewEvidenceRuntime({ workspaceRoot: cwd, base, evidenceUnits: options.evidenceUnits });
+  const metadata = {
+    ...jobMetadata,
+    evidenceLeaseEnabled: true,
+    evidenceLease: { limitUnits: options.evidenceUnits, usedUnits: 0, remainingUnits: options.evidenceUnits, exhausted: false, phase: "investigating", allowedCalls: 0, deniedCalls: 0 },
+    reviewControlRoot: evidenceRuntime.controlRoot,
+  };
+  try {
+    return await executeOperation({
+      profile: "review",
+      renderedPrompt,
+      cwd,
+      options,
+      outputSchema,
+      jobMetadata: metadata,
+      execution: {
+        executionCwd: evidenceRuntime.executionCwd,
+        reviewEvidence: { mcpConfigPath: evidenceRuntime.mcpConfigPath },
+        leaseStatePath: evidenceRuntime.leaseStatePath,
+        reviewControlRoot: evidenceRuntime.controlRoot,
+      },
+    });
+  } finally {
+    if (!options.background) await cleanupReviewEvidenceRuntime(evidenceRuntime);
+  }
 }
 
 export async function getJobStatus({ workspaceRoot, jobId }) {
@@ -116,7 +146,7 @@ export async function getJobResult({ workspaceRoot, jobId }) {
   if (job.status === "cancelled") throw new Error(`Job ${job.id} was cancelled`);
   if (job.status === "timed_out") throw new Error(`Job ${job.id} exceeded its ${job.timeoutMs}ms wall-clock timeout`);
   if (job.status !== "completed") throw jobFailure(job);
-  const result = await readClaudeJobResult(job), options = { json: true, "task-profile": job.taskProfile, "review-profile": job.reviewProfile, model: job.requestedModel ?? job.model, effort: job.effort, "parent-job-id": job.parentJobId, "cumulative-chain-cost-usd": job.cumulativeChainCostUsd, "max-turns": job.maxTurns, "finalize-at-turn": job.finalizeAtTurn, "max-budget-usd": job.maxBudgetUsd, "timeout-ms": job.timeoutMs };
+  const parsed = await readClaudeJobResult(job), result = { ...parsed, evidenceLease: job.evidenceLease, evidenceLeaseExhausted: job.evidenceLeaseExhausted, costBudgetExhausted: job.costBudgetExhausted, turnLimitReached: job.turnLimitReached }, options = { json: true, "task-profile": job.taskProfile, "review-profile": job.reviewProfile, model: job.requestedModel ?? job.model, effort: job.effort, "parent-job-id": job.parentJobId, "cumulative-chain-cost-usd": job.cumulativeChainCostUsd, "max-turns": job.maxTurns, "finalize-at-turn": job.finalizeAtTurn, "max-budget-usd": job.maxBudgetUsd, "timeout-ms": job.timeoutMs };
   return { kind: "result", result, job, options, metadata: jobMetadata(job) };
 }
 
@@ -131,6 +161,7 @@ export async function cancelJob({ workspaceRoot, jobId }) {
     throw error;
   }
   const transition = await transitionJob(workspace, job.id, ["running"], current => ({ ...current, status: "cancelled", phase: "cancelled", cancellationMode: "hard_process_tree", finishedAt: new Date().toISOString() }));
+  if (job.reviewControlRoot) await cleanupReviewEvidenceRuntime({ controlRoot: job.reviewControlRoot });
   return { kind: "job", job: transition.record };
 }
 
@@ -152,7 +183,9 @@ export function applyReviewRuntime(options, reviewConfig, { applyBase = true } =
   if (applyBase) options.base ??= reviewConfig.base;
   options.model ??= reviewConfig.model ?? profile.model; options.effort ??= profile.effort;
   if (!["low", "medium", "high"].includes(options.effort)) throw new Error("effort must be low, medium, or high");
-  options["max-turns"] = positiveInteger(options["max-turns"] ?? profile.maxTurns, "max_turns");
+  options.evidenceLeaseEnabled = reviewConfig.evidenceLeaseEnabled === true;
+  options.evidenceUnits = profile.evidenceUnits;
+  options["max-turns"] = positiveInteger(options["max-turns"] ?? (options.evidenceLeaseEnabled ? profile.evidenceMaxTurns : profile.maxTurns), "max_turns");
   if (options["max-turns"] < 2) throw new Error("Review max_turns must be at least 2");
   options["finalize-at-turn"] = positiveInteger(options["finalize-at-turn"] ?? Math.min(profile.finalizeAtTurn, options["max-turns"] - 1), "finalize_at_turn");
   if (options["finalize-at-turn"] >= options["max-turns"]) throw new Error("finalize_at_turn must be lower than max_turns");
@@ -161,8 +194,9 @@ export function applyReviewRuntime(options, reviewConfig, { applyBase = true } =
 
 function taskOptions(request) { return { json: true, background: Boolean(request.background), write: false, resume: request.resumeSessionId ?? request.resume ?? null, continue: Boolean(request.continueSession), model: request.model ?? null, effort: request.effort ?? null, "task-profile": request.taskProfile ?? null, "max-turns": request.maxTurns ?? null, "finalize-at-turn": request.finalizeAtTurn ?? null, "max-budget-usd": request.maxBudgetUsd ?? null, "timeout-ms": request.timeoutMs ?? null, backgroundTimeoutMs: request.backgroundTimeoutMs, purpose: request.purpose ?? "user" }; }
 function reviewOptions(request) { return { json: true, background: Boolean(request.background), model: request.model ?? null, effort: request.effort ?? null, base: request.base ?? null, "review-profile": request.reviewProfile ?? null, "max-turns": request.maxTurns ?? null, "finalize-at-turn": request.finalizeAtTurn ?? null, "max-budget-usd": request.maxBudgetUsd ?? null, "timeout-ms": request.timeoutMs ?? null, purpose: "user" }; }
-function reviewBudgetGuidance(options) { return `Review profile: ${options["review-profile"]}. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. Beginning with turn ${options["finalize-at-turn"]}, stop expanding the investigation. Use remaining turns to verify findings, enumerate examined and skipped files, state uncertainty and budget exhaustion, and recommend only a focused deeper follow-up when warranted.`; }
-function reviewCollectionGuidance(context) { return context.inline ? "Inspect the supplied diff. Use repository tools only for focused caller or invariant tracing." : `Use the bounded read-only adapter for patch content: node ${JSON.stringify(REVIEW_DIFF_ADAPTER)} --base ${JSON.stringify(context.adapterBase)} --file <repo-relative-path> [--file <path> ...] --max-bytes 65536. Use at most five files per call. The process already runs at the repository root. Run exactly one command per Bash tool call; do not use git -C, pipes, redirects, command separators, echo, tail, or shell composition. Use Read, Grep, or Glob for focused follow-up.`; }
+function reviewBudgetGuidance(options) { return options.evidenceLeaseEnabled ? `Review profile: ${options["review-profile"]}. Evidence Lease: ${options.evidenceUnits} units. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. The evidence server is authoritative: when it reports phase=finalizing, request no more evidence and produce the structured final review. The turn and cost limits are final circuit breakers; never resume, retry, switch models, or expand a budget automatically.` : `Review profile: ${options["review-profile"]}. Maximum turns: ${options["max-turns"]}. Maximum budget: $${options["max-budget-usd"]}. Beginning with turn ${options["finalize-at-turn"]}, stop expanding the investigation. Use remaining turns to verify findings, enumerate examined and skipped files, state uncertainty and budget exhaustion, and recommend only a focused deeper follow-up when warranted.`; }
+function reviewCollectionGuidance(context, options) { if (options.evidenceLeaseEnabled) return "Use only review_diff, review_file, and review_context for repository evidence. These tools are read-only and server-bounded. Do not assume any repository content that the evidence tools did not return."; return context.inline ? "Inspect the supplied diff. Use repository tools only for focused caller or invariant tracing." : `Use the bounded read-only adapter for patch content: node ${JSON.stringify(REVIEW_DIFF_ADAPTER)} --base ${JSON.stringify(context.adapterBase)} --file <repo-relative-path> [--file <path> ...] --max-bytes 65536. Use at most five files per call. The process already runs at the repository root. Run exactly one command per Bash tool call; do not use git -C, pipes, redirects, command separators, echo, tail, or shell composition. Use Read, Grep, or Glob for focused follow-up.`; }
+function reviewInput(context, options) { return options.evidenceLeaseEnabled ? "Repository evidence is available exclusively through the bounded review MCP tools." : `Repository: ${context.root}\n${context.diff}`; }
 function positiveInteger(value, name) { const parsed = Number(value); if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} requires a positive integer`); return parsed; }
 function positiveNumber(value, name) { const parsed = Number(value); if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} requires a positive number`); return parsed; }
 function normalizeTaskBudget(options) { const maxTurns = positiveInteger(options["max-turns"], "max_turns"), finalizeAtTurn = options["finalize-at-turn"] == null ? null : positiveInteger(options["finalize-at-turn"], "finalize_at_turn"); if (finalizeAtTurn && finalizeAtTurn >= maxTurns) throw new Error("finalize_at_turn must be lower than max_turns"); options["max-turns"] = maxTurns; options["finalize-at-turn"] = finalizeAtTurn; options["max-budget-usd"] = positiveNumber(options["max-budget-usd"], "max_budget_usd"); return finalizeAtTurn ? `\n\nTurn budget: Beginning with turn ${finalizeAtTurn}, stop expanding the investigation and use the remaining turns to synthesize evidence, state uncertainty, and produce the final answer.` : ""; }

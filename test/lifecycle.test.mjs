@@ -54,3 +54,37 @@ test("reconciliation does not mislabel a worker after cancellation is requested"
   const job = { id: "cancelling", cwd: "/unused", status: "running", pid: 99999999, cancellationRequestedAt: new Date().toISOString() };
   assert.equal(await reconcileJob(job), job);
 });
+
+test("worker-lost reconciliation kills the original process group without a persisted Claude PID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "claude-worker-gap-test-")), workspace = join(root, "workspace"), state = join(root, "state"), pidFile = join(root, "descendant.pid");
+  await mkdir(workspace);
+  const stateUrl = new URL("../scripts/lib/state.mjs", import.meta.url).href;
+  const lifecycleUrl = new URL("../scripts/lib/job-lifecycle.mjs", import.meta.url).href;
+  const processUrl = new URL("../scripts/lib/process.mjs", import.meta.url).href;
+  const probe = `
+import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { readJob, saveJob } from ${JSON.stringify(stateUrl)};
+import { reconcileJob } from ${JSON.stringify(lifecycleUrl)};
+import { isProcessRunning } from ${JSON.stringify(processUrl)};
+const [workspace,pidFile] = process.argv.slice(1);
+const workerCode = 'const{spawn}=require("node:child_process"),{writeFileSync}=require("node:fs");const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{detached:false,stdio:"ignore"});writeFileSync(process.env.DESCENDANT_PID,String(child.pid));setInterval(()=>{},1000)';
+const worker = spawn(process.execPath, ["-e", workerCode], { detached: true, env: { ...process.env, DESCENDANT_PID: pidFile }, stdio: "ignore" });
+while (true) { try { await readFile(pidFile); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); } }
+const descendantPid = Number(await readFile(pidFile, "utf8"));
+await saveJob({ recordVersion: 4, id: "worker-gap", cwd: workspace, profile: "review", purpose: "e2e", status: "running", phase: "starting", pid: worker.pid, workerPid: worker.pid, claudePid: null, createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 60000).toISOString() });
+process.kill(worker.pid, "SIGKILL");
+await new Promise(resolve => worker.once("close", resolve));
+const reconciled = await reconcileJob(await readJob(workspace, "worker-gap"));
+console.log(JSON.stringify({ status: reconciled.status, errorKind: reconciled.errorKind, descendantAlive: isProcessRunning(descendantPid) }));
+`;
+  const output = await new Promise((resolveProbe, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", probe, workspace, pidFile], { cwd: workspace, env: { ...process.env, CLAUDE_COMPANION_STATE_ROOT: state }, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject); child.once("close", code => resolveProbe({ code, stdout, stderr }));
+  });
+  assert.equal(output.code, 0, output.stderr);
+  assert.deepEqual(JSON.parse(output.stdout), { status: "failed", errorKind: "worker_lost", descendantAlive: false });
+});

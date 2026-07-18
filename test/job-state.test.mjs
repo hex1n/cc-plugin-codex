@@ -61,6 +61,8 @@ test("a max-turns result preserves the actionable Claude error", async () => {
   assert.equal(job.upstream_error_subtype, "error_max_turns");
   assert.equal(job.suggested_action, "resume_or_increase_turns");
   assert.equal(job.session_id, "resume-me");
+  assert.equal(job.turn_limit_reached, true);
+  assert.equal(job.cost_budget_exhausted, false);
 });
 
 test("a detached budget error preserves usage and cost", async () => {
@@ -72,6 +74,8 @@ test("a detached budget error preserves usage and cost", async () => {
   assert.equal(job.total_cost_usd, 0.25);
   assert.equal(job.num_turns, 2);
   assert.equal(job.usage.output_tokens, 5);
+  assert.equal(job.cost_budget_exhausted, true);
+  assert.equal(job.turn_limit_reached, false);
   const result = await callMcpRaw(fx.env, "claude_job_result", { workspace_root: fx.cwd, job_id: id }), error = result.error.data;
   assert.equal(result.error.code, -32603); assert.equal(error.error_kind, "max_budget"); assert.equal(error.session_id, "budget-session"); assert.equal(error.requested_model, "sonnet"); assert.equal(error.total_cost_usd, 0.25); assert.equal(error.usage.output_tokens, 5);
 });

@@ -46,6 +46,8 @@ test("Claude error payloads preserve usage before raising", () => {
     assert.equal(rendered.total_cost_usd, 0.2);
     assert.equal(rendered.num_turns, 2);
     assert.equal(rendered.usage.output_tokens, 3);
+    assert.equal(rendered.cost_budget_exhausted, true);
+    assert.equal(rendered.turn_limit_reached, false);
     return true;
   });
 });

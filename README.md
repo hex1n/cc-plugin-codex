@@ -130,6 +130,7 @@ Environment variables:
 | `CLAUDE_COMPANION_REVIEW_BASE` | unset | Default review base ref |
 | `CLAUDE_COMPANION_REVIEW_MODEL` | unset | Default Claude model for review commands |
 | `CLAUDE_COMPANION_REVIEW_PROFILE` | `standard` | Default review budget profile (`quick`, `standard`, or `deep`) |
+| `CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE` | `off` | Enable the experimental single-invocation, MCP-bounded review evidence path |
 | `CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS` | `3600000` | Detached-job wall-clock limit |
 | `CLAUDE_COMPANION_STARTING_TIMEOUT_MS` | `60000` | Stale starting-record limit |
 | `CLAUDE_COMPANION_RETENTION_DAYS` | `30` | Finished-job retention age |
@@ -157,11 +158,12 @@ live at `.codex/cc-plugin-codex.json`; user settings live at
     "base": "main",
     "model": "sonnet",
     "profile": "standard",
+    "evidenceLeaseEnabled": false,
     "profiles": {
-      "gate": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "maxBudgetUsd": 0.2, "timeoutMs": 90000 },
-      "quick": { "model": "sonnet", "effort": "low", "maxTurns": 6, "finalizeAtTurn": 4, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
-      "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 12, "finalizeAtTurn": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
-      "deep": { "model": "opus", "effort": "high", "maxTurns": 24, "finalizeAtTurn": 20, "maxBudgetUsd": 3, "timeoutMs": 600000 }
+      "gate": { "model": "sonnet", "effort": "low", "maxTurns": 4, "finalizeAtTurn": 3, "evidenceUnits": 2, "evidenceMaxTurns": 6, "maxBudgetUsd": 0.2, "timeoutMs": 90000 },
+      "quick": { "model": "sonnet", "effort": "low", "maxTurns": 6, "finalizeAtTurn": 4, "evidenceUnits": 3, "evidenceMaxTurns": 7, "maxBudgetUsd": 0.3, "timeoutMs": 120000 },
+      "standard": { "model": "sonnet", "effort": "medium", "maxTurns": 12, "finalizeAtTurn": 9, "evidenceUnits": 5, "evidenceMaxTurns": 9, "maxBudgetUsd": 1, "timeoutMs": 240000 },
+      "deep": { "model": "opus", "effort": "high", "maxTurns": 24, "finalizeAtTurn": 20, "evidenceUnits": 8, "evidenceMaxTurns": 12, "maxBudgetUsd": 3, "timeoutMs": 600000 }
     }
   },
   "jobs": { "backgroundTimeoutMs": 3600000 }
@@ -206,21 +208,34 @@ small scans, `standard` for normal reviews, and `deep` for security, concurrency
 migrations, or core state machines. Typed MCP budget fields override the selected
 profile for one invocation.
 
+The experimental Evidence Lease path is default-off. When enabled, one Claude
+invocation receives exactly three read-only MCP tools: `review_diff`,
+`review_file`, and `review_context`. Quick, standard, and deep receive 3, 5, and
+8 evidence units respectively. The server moves the job to `finalizing` when
+the lease reaches zero and returns structured denials without new evidence for
+later calls. `evidence_lease_exhausted` is normal investigation closure;
+`cost_budget_exhausted` and `turn_limit_reached` are distinct circuit breakers.
+No condition automatically resumes, retries, changes model, or expands budget.
+For review, `finalize_at_turn` remains only a deprecated compatibility hint
+while the feature flag is off.
+
 Claude's `--max-turns` limits agentic turns; its reported `num_turns`
 uses a broader usage counter and may be numerically higher. The plugin treats
 the dollar budget as a soft target that Claude CLI can slightly exceed; only the
 wall-clock timeout is enforced by the plugin as a hard execution ceiling. Both
 turn counters and the final cost are preserved for auditability.
 
-Large reviews use a bounded manifest instead of embedding every changed path.
-Claude can request focused patches through the bundled read-only diff adapter,
-whose output is capped independently of repository size. The existing 256 KiB
-inline emergency ceiling remains; there is no 96 KiB review coverage limit.
+With Evidence Lease disabled, large reviews retain the bounded manifest and
+legacy diff-adapter behavior. With it enabled, diff and follow-up context are
+returned only by the job-local evidence MCP, capped at 64 KiB per response and
+confined by real paths to the workspace.
 
 ## Security model
 
-- Review, adversarial review, transfer, and default tasks use Claude plan mode
-  with read-oriented tools.
+- Evidence-enabled review and adversarial review disable all Claude built-ins,
+  use an exact MCP allowlist, and run Claude from a unique empty control cwd.
+  The feature-off compatibility path and default read-only tasks retain their
+  existing plan-mode behavior.
 - Write access requires the explicit task `--write` flag, an exact-version
   sandbox compatibility preflight bound to the canonical Claude executable
   hash, and Claude `acceptEdits` inside an isolated standalone clone. Source

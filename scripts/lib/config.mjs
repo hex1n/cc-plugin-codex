@@ -6,7 +6,7 @@ const PLUGIN_DATA = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
 const CONFIG_ROOT = process.env.CLAUDE_COMPANION_CONFIG_ROOT ?? (PLUGIN_DATA ? join(PLUGIN_DATA, "config") : join(homedir(), ".codex", "claude-companion"));
 const REVIEW_GATE_PATH = join(CONFIG_ROOT, "review-gate.json");
 const REVIEW_GATE_CACHE_PATH = join(CONFIG_ROOT, "review-gate-cache.json");
-const REVIEW_HARD_LIMITS = Object.freeze({ maxTurns: 40, maxBudgetUsd: 5, timeoutMs: 900_000 });
+const REVIEW_HARD_LIMITS = Object.freeze({ maxTurns: 40, evidenceUnits: 20, maxBudgetUsd: 5, timeoutMs: 900_000 });
 const PROFILE_NAMES = Object.freeze(["quick", "standard", "deep"]);
 const EFFORT_LEVELS = Object.freeze(["low", "medium", "high"]);
 
@@ -65,11 +65,12 @@ const DEFAULT_RUNTIME_CONFIG = Object.freeze({
     base: null,
     model: null,
     profile: "standard",
+    evidenceLeaseEnabled: false,
     profiles: Object.freeze({
-      gate: Object.freeze({ model: "sonnet", effort: "low", maxTurns: 4, finalizeAtTurn: 3, maxBudgetUsd: 0.2, timeoutMs: 90_000 }),
-      quick: Object.freeze({ model: "sonnet", effort: "low", maxTurns: 6, finalizeAtTurn: 4, maxBudgetUsd: 0.3, timeoutMs: 120_000 }),
-      standard: Object.freeze({ model: "sonnet", effort: "medium", maxTurns: 12, finalizeAtTurn: 9, maxBudgetUsd: 1, timeoutMs: 240_000 }),
-      deep: Object.freeze({ model: "opus", effort: "high", maxTurns: 24, finalizeAtTurn: 20, maxBudgetUsd: 3, timeoutMs: 600_000 })
+      gate: Object.freeze({ model: "sonnet", effort: "low", maxTurns: 4, finalizeAtTurn: 3, evidenceUnits: 2, evidenceMaxTurns: 6, maxBudgetUsd: 0.2, timeoutMs: 90_000 }),
+      quick: Object.freeze({ model: "sonnet", effort: "low", maxTurns: 6, finalizeAtTurn: 4, evidenceUnits: 3, evidenceMaxTurns: 7, maxBudgetUsd: 0.3, timeoutMs: 120_000 }),
+      standard: Object.freeze({ model: "sonnet", effort: "medium", maxTurns: 12, finalizeAtTurn: 9, evidenceUnits: 5, evidenceMaxTurns: 9, maxBudgetUsd: 1, timeoutMs: 240_000 }),
+      deep: Object.freeze({ model: "opus", effort: "high", maxTurns: 24, finalizeAtTurn: 20, evidenceUnits: 8, evidenceMaxTurns: 12, maxBudgetUsd: 3, timeoutMs: 600_000 })
     })
   }),
   jobs: Object.freeze({ backgroundTimeoutMs: 3_600_000 })
@@ -88,7 +89,7 @@ export async function loadRuntimeConfig({ cwd = process.cwd(), env = process.env
       maxBudgetUsd: numberOrNull(env.CLAUDE_COMPANION_MAX_BUDGET_USD),
       timeoutMs: numberOrNull(env.CLAUDE_COMPANION_TASK_TIMEOUT_MS)
     },
-    review: { base: emptyToNull(env.CLAUDE_COMPANION_REVIEW_BASE), model: emptyToNull(env.CLAUDE_COMPANION_REVIEW_MODEL), profile: emptyToNull(env.CLAUDE_COMPANION_REVIEW_PROFILE) },
+    review: { base: emptyToNull(env.CLAUDE_COMPANION_REVIEW_BASE), model: emptyToNull(env.CLAUDE_COMPANION_REVIEW_MODEL), profile: emptyToNull(env.CLAUDE_COMPANION_REVIEW_PROFILE), evidenceLeaseEnabled: env.CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE == null || env.CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE === "" ? null : booleanValue(env.CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE, "CLAUDE_COMPANION_REVIEW_EVIDENCE_LEASE") },
     jobs: { backgroundTimeoutMs: numberOrNull(env.CLAUDE_COMPANION_BACKGROUND_TIMEOUT_MS) }
   };
   const userValue = await readOptionalConfig(user);
@@ -124,7 +125,7 @@ async function readOptionalConfig(path) {
 
 function validateShape(value, path) {
   if (!plainObject(value)) throw new Error(`Configuration ${path} must be a JSON object`);
-  const allowed = { task: new Set(["profile", "model", "effort", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs", "profiles"]), review: new Set(["base", "model", "profile", "profiles"]), jobs: new Set(["backgroundTimeoutMs"]) };
+  const allowed = { task: new Set(["profile", "model", "effort", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs", "profiles"]), review: new Set(["base", "model", "profile", "evidenceLeaseEnabled", "profiles"]), jobs: new Set(["backgroundTimeoutMs"]) };
   for (const [section, fields] of Object.entries(value)) {
     if (!allowed[section]) throw new Error(`Unknown configuration section: ${section}`);
     if (!plainObject(fields)) throw new Error(`Configuration section ${section} must be an object`);
@@ -161,6 +162,7 @@ function validateRuntimeConfig(config) {
   nullableString(config.review.base, "review.base");
   nullableString(config.review.model, "review.model");
   profileName(config.review.profile, "review.profile");
+  if (typeof config.review.evidenceLeaseEnabled !== "boolean") throw new Error("review.evidenceLeaseEnabled must be a boolean");
   for (const [name, profile] of Object.entries(config.review.profiles)) validateReviewProfile(profile, `review.profiles.${name}`);
   positiveInteger(config.jobs.backgroundTimeoutMs, "jobs.backgroundTimeoutMs", false);
 }
@@ -173,7 +175,7 @@ function profileName(value, name) { if (!PROFILE_NAMES.includes(value)) throw ne
 function reviewProfileKey(value, name) { if (!["gate", "quick", "standard", "deep"].includes(value)) throw new Error(`${name} must be one of: gate, quick, standard, deep`); }
 function validateProfileMap(section, value, path) {
   if (!plainObject(value)) throw new Error(`Configuration field ${section}.profiles in ${path} must be an object`);
-  const allowed = new Set(["model", "effort", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs"]);
+  const allowed = new Set(["model", "effort", "maxTurns", "finalizeAtTurn", "maxBudgetUsd", "timeoutMs", "evidenceUnits", "evidenceMaxTurns"]);
   for (const [name, profile] of Object.entries(value)) {
     if (section === "review") reviewProfileKey(name, "review.profiles key");
     else profileName(name, "task.profiles key");
@@ -183,7 +185,12 @@ function validateProfileMap(section, value, path) {
 }
 function validateReviewProfile(profile, name) {
   validateCommonProfile(profile, name);
+  positiveInteger(profile.evidenceUnits, `${name}.evidenceUnits`, false);
+  positiveInteger(profile.evidenceMaxTurns, `${name}.evidenceMaxTurns`, false);
+  if (profile.evidenceMaxTurns < profile.evidenceUnits + 4) throw new Error(`${name}.evidenceMaxTurns must allow evidenceUnits + 4 turns`);
   if (profile.maxTurns > REVIEW_HARD_LIMITS.maxTurns) throw new Error(`${name}.maxTurns must not exceed ${REVIEW_HARD_LIMITS.maxTurns}`);
+  if (profile.evidenceMaxTurns > REVIEW_HARD_LIMITS.maxTurns) throw new Error(`${name}.evidenceMaxTurns must not exceed ${REVIEW_HARD_LIMITS.maxTurns}`);
+  if (profile.evidenceUnits > REVIEW_HARD_LIMITS.evidenceUnits) throw new Error(`${name}.evidenceUnits must not exceed ${REVIEW_HARD_LIMITS.evidenceUnits}`);
   if (profile.maxBudgetUsd > REVIEW_HARD_LIMITS.maxBudgetUsd) throw new Error(`${name}.maxBudgetUsd must not exceed ${REVIEW_HARD_LIMITS.maxBudgetUsd}`);
   if (profile.timeoutMs > REVIEW_HARD_LIMITS.timeoutMs) throw new Error(`${name}.timeoutMs must not exceed ${REVIEW_HARD_LIMITS.timeoutMs}`);
   if (name.endsWith(".gate") && (profile.maxTurns > 6 || profile.maxBudgetUsd > 0.5 || profile.timeoutMs > 120_000)) throw new Error(`${name} exceeds the Stop gate safety ceiling`);
